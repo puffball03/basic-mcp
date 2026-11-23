@@ -181,3 +181,8 @@ cython_debug/
 .cursorindexingignore
 # Course brief (not for redistribution)
 MCP-directions.pdf
+
+# Militech runtime output
+data/escalations.jsonl
+data/decisions.jsonl
+traces/

@@ -1,0 +1,26 @@
+services:
+  # ruff + pytest — no secrets needed
+  test:
+    build: .
+    image: militech-mcp
+    command: ["test"]
+
+  # 6 demo scenarios against Azure Foundry; credentials are read at runtime from .env
+  demo:
+    image: militech-mcp
+    build: .
+    command: ["demo"]
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./traces:/app/traces
+      # seed JSONL + runtime escalations/decisions, visible on the host after a run
+      - ./data:/app/data
+
+  # MCP server over stdio, e.g. `docker compose run --rm -T server`
+  server:
+    image: militech-mcp
+    build: .
+    command: ["server"]
+    stdin_open: true
