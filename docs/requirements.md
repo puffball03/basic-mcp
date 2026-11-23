@@ -29,7 +29,7 @@ current equipment (item and `issued_date` per unit).
 | `corpo_staff` | Desk workers in the Militech arcology |
 | `cyberware_tech` | Build and maintain implants and hardware |
 | `executive` | Corporate executives |
-| `netrunner` | Jack into the net and fight rogue ICE |
+| `netrunner` | Netspace operations and intelligence |
 
 ## 3. Catalog
 
