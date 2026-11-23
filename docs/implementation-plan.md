@@ -33,7 +33,7 @@ src/militech_equipment/        # MCP server package
   eligibility.py   check_request_eligibility()
   escalation.py    flag_for_human_review()
   decisions.py     record_decision(), load_pending()
-  server.py        FastMCP app: thin @mcp.tool wrappers over the functions above
+  server.py        MCPServer app (mcp 2.x): thin @server.tool() wrappers over the functions above
 src/militech_agent/
   llm.py           LLMClient protocol, FoundryLLM (AnthropicFoundry), ScriptedLLM (tests)
   mcp_session.py   start stdio server, list tools → Claude tool schemas, call_tool()
@@ -83,8 +83,8 @@ docker/entrypoint.sh   # dispatches server | demo | test
 
 ## M1 — Minimal one-tool MCP server + client (deliverable #2)
 
-- `scripts/hello_server.py`: FastMCP with a single `ping(name) -> "pong, {name}"` tool over stdio.
-- `scripts/hello_client.py`: `stdio_client` + `ClientSession`. It lists the tools, calls `ping`,
+- `scripts/hello_server.py`: `MCPServer` (mcp 2.x, formerly FastMCP) with a single `ping(name) -> "pong, {name}"` tool over stdio.
+- `scripts/hello_client.py`: `mcp.Client(StdioServerParameters(...))`. It lists the tools, calls `ping`,
   and prints the result.
 - **Test:** `tests/integration/test_hello.py` starts the server via the stdio client, asserts
   that `ping` is registered, and asserts the response text.
