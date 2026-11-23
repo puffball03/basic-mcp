@@ -158,3 +158,37 @@ currently returns `eligible: true`. This guardrail is enforced on the server.
 | 4 | netrunner | "Requisitioning a military-grade combat drone for a run next week." | escalate `OFF_CATALOG` |
 | 5 | E9999 (unknown) | "Need a neural headset, choom." | escalate `EMPLOYEE_NOT_FOUND` |
 | 6 | executive, terminal 24 months old | "My terminal lags during board calls. Replace it." | approve (replacement past the 18-month refresh) |
+
+## 10. Packaging & runtime (Docker)
+
+The project is containerized from the first milestone.
+
+- **One image** (`militech-mcp`) contains both the MCP server and the agent. The server talks
+  over stdio, so the agent starts it as a child process inside the same container. The image
+  has three commands:
+  - `server`: runs the MCP server over stdio on its own. Any MCP client on your machine can
+    connect to it with `docker run -i militech-mcp server`.
+  - `demo`: runs the 6 scenarios in §9.
+  - `test`: runs ruff and pytest.
+- **Build:**
+  - base image `python:3.12-slim`, with `uv` copied from `ghcr.io/astral-sh/uv`
+  - dependencies installed from `uv.lock` with `uv sync --frozen`
+  - multi-stage build with a dependency layer first, so rebuilds are cached
+  - runs as a non-root user
+- **`.dockerignore`** excludes `.env`, `.git`, `traces/`, runtime JSONL files
+  (`escalations.jsonl`, `decisions.jsonl`), and the course brief PDF.
+- **Secrets** are never baked into the image. Foundry credentials reach the container at runtime
+  through `env_file: .env`.
+- **Data:** seed JSONL files are copied into the image. The runtime files in `data/`
+  (escalations and decisions) and `traces/` are mounted from your machine, so you can inspect
+  results after a run.
+- **docker compose** (`compose.yaml`) defines three services:
+
+  | Service | Runs | Needs secrets |
+  |---|---|---|
+  | `test` | ruff + pytest | no |
+  | `demo` | the 6 scenarios against Foundry | yes (`.env`) |
+  | `server` | the MCP server over stdio | no |
+
+- **CI** builds the image and runs ruff and pytest **inside the container** on every push. A
+  green pipeline run therefore also proves the container works.

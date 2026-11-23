@@ -17,6 +17,9 @@ and becomes one Linear issue.
   `AZURE_FOUNDRY_ENDPOINT`, `AZURE_FOUNDRY_API_KEY`, `MILITECH_MODEL=claude-sonnet-5-5`.
   CI never needs them.
 - The data directory comes from `MILITECH_DATA_DIR` and defaults to `./data`.
+- **Docker from day one** (requirements §10). Everything runs in one image, `militech-mcp`. CI
+  builds the image and runs the checks inside it. `docker compose run --rm test` is the local
+  equivalent, and running `uv` directly on your machine still works for fast iteration.
 
 ## Target layout
 
@@ -44,20 +47,39 @@ scripts/hello_server.py, scripts/hello_client.py   # milestone 1 proof
 data/employees.jsonl, data/policies.jsonl           # seed (committed)
 data/escalations.jsonl, data/decisions.jsonl         # runtime (gitignored)
 tests/unit/  tests/integration/  tests/agent/
+Dockerfile        # multi-stage: python:3.12-slim + uv, non-root user
+.dockerignore
+compose.yaml      # services: test, demo, server
+docker/entrypoint.sh   # dispatches server | demo | test
 .github/workflows/ci.yml
 ```
 
 ---
 
-## M0 — Project scaffold & CI skeleton
+## M0 — Project scaffold, Docker & CI skeleton
 
-- `uv init`, `pyproject.toml` with a src layout, ruff config, and a pytest config (`asyncio_mode = auto`).
+- `uv init`, `pyproject.toml` with a src layout, ruff config, and a pytest config
+  (`asyncio_mode = auto`). Commit `uv.lock`.
 - `.gitignore`: `.env`, `data/escalations.jsonl`, `data/decisions.jsonl`, `traces/`.
-- `.github/workflows/ci.yml`: checkout → `astral-sh/setup-uv` → `uv sync` → `ruff check` →
-  `pytest`.
-- **Red/green:** `tests/test_smoke.py` imports the package and asserts the version.
+- **Dockerfile** (multi-stage):
+  - `python:3.12-slim` base, with `COPY --from=ghcr.io/astral-sh/uv` for the uv binary
+  - dependency layer: copy `pyproject.toml` and `uv.lock`, then `uv sync --frozen --no-install-project`
+  - app layer: copy the source and seed data, then `uv sync --frozen`
+  - non-root `militech` user; `ENTRYPOINT ["docker/entrypoint.sh"]`, with `test` as the default command
+- `docker/entrypoint.sh`: `server` → `python -m militech_equipment.server`, `demo` →
+  `python -m militech_agent.demo`, `test` → `ruff check . && pytest`. Anything else runs as a
+  plain command.
+- `.dockerignore`: `.env`, `.git`, `.venv`, `traces/`, runtime JSONL files, `MCP-directions.pdf`.
+- `compose.yaml`:
+  - `test` service: no secrets
+  - `demo` service: `env_file: .env`, with `./data` runtime files and `./traces` mounted
+  - `server` service: `stdin_open: true`
+- `.github/workflows/ci.yml`: checkout → `docker build -t militech-mcp .` → `docker run --rm
+  militech-mcp test`. Use the buildx GitHub Actions cache to speed up builds.
+- **Red/green:** `tests/test_smoke.py` imports the package and asserts the version. Write it
+  first, watch the container run fail, then make it pass.
 
-**Done when** CI is green on a push.
+**Done when** `docker compose run --rm test` passes locally and CI is green on a push.
 
 ## M1 — Minimal one-tool MCP server + client (deliverable #2)
 
@@ -67,7 +89,9 @@ tests/unit/  tests/integration/  tests/agent/
 - **Test:** `tests/integration/test_hello.py` starts the server via the stdio client, asserts
   that `ping` is registered, and asserts the response text.
 
-**Done when** the terminal output shows the tool list and `pong`. Screenshot it for deliverable #2.
+**Done when** the terminal output shows the tool list and `pong`, both on your machine and inside
+the container (`docker compose run --rm test python scripts/hello_client.py`). Screenshot it
+for deliverable #2.
 
 ## M2 — Seed data, repository, `get_employee_info`
 
@@ -203,8 +227,12 @@ Tests (scripted):
 
 ## M12 — Demo run & deliverables
 
-- `uv run python -m militech_agent.demo` runs the 6 scenarios from requirements §9 against Foundry
-  on a fresh copy of the seed data. It prints traces and final results and writes `traces/*.md`.
+- `docker compose run --rm demo` runs the 6 scenarios from requirements §9 against Foundry on a
+  fresh copy of the seed data. It prints traces and final results and writes `traces/*.md` to the
+  mounted folder on your machine. `uv run python -m militech_agent.demo` still works outside
+  Docker.
+- `docker run -i militech-mcp server` serves the tools to an MCP client on your machine. Document
+  this in the README.
 - `tests/agent/test_scenarios.py` replays all 6 with `ScriptedLLM` and asserts the expected
   decision and reason code. This keeps the demos in CI without a key.
 - README: setup, `.env`, how to run the server, the client, the tests and the demo.
@@ -223,4 +251,4 @@ Tests (scripted):
 | Clear-cut approve/deny (10) | M9, M10, M12 |
 | Escalates with reasons (15) | M5, M9, M12 |
 | Reflection improves/confirms (10) | M11 |
-| Pipeline green (10) | M0, all |
+| Pipeline green (10) | M0 (containerized CI), all |
