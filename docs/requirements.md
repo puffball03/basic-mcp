@@ -57,7 +57,9 @@ Evaluated as of a date `as_of`. It defaults to today and is pinned in tests.
 
 1. Unknown employee → `employee_not_found`.
 2. Item not in catalog → `off_catalog`.
-3. Unknown role, an `issued_date` after `as_of`, or more units held than the cap allows → `data_conflict`.
+3. Unknown role, an `issued_date` after `as_of` on a unit of the requested item, or more units
+   held than the cap allows → `data_conflict`. A future-dated unit of a different item does not
+   block the request.
 4. `max_quantity == 0` → `not_entitled`.
 5. **Held count** = units on file + pending approved *additional* units from `decisions.jsonl`.
    An approved *replacement* resets the oldest unit's date to the decision date.

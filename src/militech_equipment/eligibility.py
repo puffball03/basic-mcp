@@ -17,10 +17,31 @@ from typing import Any
 
 from militech_equipment import dates
 from militech_equipment.catalog import CATALOG, normalize_name
-from militech_equipment.dates import add_months
-from militech_equipment.employees import normalize_employee_id
+from militech_equipment.employees import (
+    employee_repo,
+    invalid_employee_id_error,
+    normalize_employee_id,
+)
 from militech_equipment.policies import policy_repo
 from militech_equipment.repository import EmployeeRepository, PolicyRepository
+
+# Every outcome carries these keys (None when they don't apply), so callers get one shape.
+_EMPTY_DETAILS: dict[str, Any] = {
+    "conflict": None,
+    "request_type_assumed": None,
+    "next_eligible_date": None,
+    "held": None,
+    "max_quantity": None,
+    "refresh_months": None,
+    "oldest_issued": None,
+}
+
+
+def _outcome(
+    status: str, employee_id: str, item: Any, *, eligible: bool = False, **details: Any
+) -> dict[str, Any]:
+    head = {"eligible": eligible, "status": status, "employee_id": employee_id, "item": item}
+    return {**head, **_EMPTY_DETAILS, **details}
 
 
 def check_request_eligibility(
@@ -34,36 +55,29 @@ def check_request_eligibility(
     """Evaluate one request. Input errors come back as {"error": ...}; outcomes as a status."""
     normalized_id = normalize_employee_id(employee_id)
     if normalized_id is None:
-        return {
-            "error": "invalid_employee_id",
-            "employee_id": employee_id,
-            "message": "Employee IDs look like E#### (e.g. E1001).",
-        }
+        return invalid_employee_id_error(employee_id)
     normalized_item = normalize_name(item)
     if normalized_item is None:
         return {"error": "invalid_item", "item": item, "message": "item must be a non-empty string"}
 
     shown_item = normalized_item if normalized_item in CATALOG else item  # off-catalog: as asked
-
-    def outcome(status: str, eligible: bool = False, **details: Any) -> dict[str, Any]:
-        base = {"eligible": eligible, "status": status, "employee_id": normalized_id}
-        return {**base, "item": shown_item, **details}
-
-    record = (employees or EmployeeRepository.from_dir()).get(normalized_id)
+    record = employee_repo(employees).get(normalized_id)
     if record is None:
-        return outcome("employee_not_found")
+        return _outcome("employee_not_found", normalized_id, shown_item)
     if normalized_item not in CATALOG:
-        return outcome("off_catalog")
+        return _outcome("off_catalog", normalized_id, shown_item)
 
-    role = record["role"]
+    role = record["role"]  # normalized by EmployeeRepository
     limits = policy_repo(policies).limits_for(role)
     if limits is None:
-        return outcome("data_conflict", conflict="unknown_role", role=role)
+        return _outcome(
+            "data_conflict", normalized_id, shown_item, conflict="unknown_role", role=role
+        )
 
     today = as_of or dates.today()
     issued = sorted(
         date.fromisoformat(unit["issued_date"])
-        for unit in record.get("equipment", [])
+        for unit in record["equipment"]
         if unit["item"] == normalized_item
     )
     rule = limits[normalized_item]
@@ -75,29 +89,24 @@ def check_request_eligibility(
         "oldest_issued": issued[0].isoformat() if issued else None,
     }
 
-    if issued and issued[-1] > today:
-        return outcome("data_conflict", conflict="future_issued_date", **numbers)
-    if len(issued) > max_quantity:
-        return outcome("data_conflict", conflict="held_above_cap", **numbers)
-    if max_quantity == 0:
-        return outcome(
-            "not_entitled", request_type_assumed=None, next_eligible_date=None, **numbers
-        )
-    if len(issued) < max_quantity:
-        return outcome(
-            "within_policy",
-            True,
-            request_type_assumed="additional",
-            next_eligible_date=None,
-            **numbers,
-        )
+    def result(status: str, **details: Any) -> dict[str, Any]:
+        return _outcome(status, normalized_id, shown_item, **numbers, **details)
 
-    next_eligible = add_months(issued[0], refresh_months)
+    # Future dates are checked per requested item (requirements §4.2 rule 3).
+    if issued and issued[-1] > today:
+        return result("data_conflict", conflict="future_issued_date")
+    if len(issued) > max_quantity:
+        return result("data_conflict", conflict="held_above_cap")
+    if max_quantity == 0:
+        return result("not_entitled")
+    if len(issued) < max_quantity:
+        return result("within_policy", eligible=True, request_type_assumed="additional")
+
+    next_eligible = dates.add_months(issued[0], refresh_months)
     due = next_eligible <= today
-    return outcome(
+    return result(
         "within_policy" if due else "refresh_not_due",
-        due,
+        eligible=due,
         request_type_assumed="replacement",
         next_eligible_date=next_eligible.isoformat(),
-        **numbers,
     )

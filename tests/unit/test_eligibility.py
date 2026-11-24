@@ -1,5 +1,7 @@
 """check_request_eligibility: the §4.2 rule, evaluated as of the pinned 2026-11-23."""
 
+import json
+
 import pytest
 
 from militech_equipment.eligibility import check_request_eligibility
@@ -77,7 +79,14 @@ def _one_employee(role, *issued, item="terminal"):
 def test_policy_statuses(check, employee_id, item, expected):
     result = check(employee_id, item)
 
-    assert result == {"employee_id": employee_id, "item": item, **expected}
+    assert result == {"employee_id": employee_id, "item": item, "conflict": None, **expected}
+
+
+# Every status carries the same keys; ones that don't apply are None.
+NO_DETAILS = {
+    "conflict": None, "request_type_assumed": None, "next_eligible_date": None,
+    "held": None, "max_quantity": None, "refresh_months": None, "oldest_issued": None,
+}  # fmt: skip
 
 
 def test_employee_not_found(check):  # demo 5
@@ -86,6 +95,7 @@ def test_employee_not_found(check):  # demo 5
         "status": "employee_not_found",
         "employee_id": "E9999",
         "item": "terminal",
+        **NO_DETAILS,
     }
 
 
@@ -96,6 +106,7 @@ def test_off_catalog(check, item):  # demo 4; synonyms are the agent's job, not 
         "status": "off_catalog",
         "employee_id": "E1004",
         "item": item,
+        **NO_DETAILS,
     }
 
 
@@ -112,6 +123,36 @@ def test_data_conflict_future_issued_date(check):
 
 def test_future_date_on_another_item_does_not_block(check):
     assert check("E1007", "terminal")["status"] == "refresh_not_due"
+
+
+@pytest.mark.parametrize(
+    ("employee_id", "item"),
+    [("E9999", "terminal"), ("E1004", "laptop"), ("E1008", "terminal"),
+     ("E1007", "holo_display"), ("E1003", "cyberdeck"), ("E1001", "holo_display"),
+     ("E1002", "terminal")],
+)  # fmt: skip
+def test_every_status_has_the_same_keys(check, employee_id, item):
+    result = check(employee_id, item)
+
+    assert set(NO_DETAILS) <= set(result)
+    assert {"eligible", "status", "employee_id", "item"} <= set(result)
+
+
+def test_mixed_case_names_in_employee_data_are_counted(check, tmp_path):
+    unit = {"asset_id": "MT-1", "item": "Terminal", "issued_date": "2025-06-01"}
+    row = {
+        "employee_id": "E2001",
+        "name": "T",
+        "role": " Executive",
+        "hire_date": "2020-01-01",
+        "equipment": [unit],
+    }
+    (tmp_path / "employees.jsonl").write_text(json.dumps(row) + "\n")
+
+    result = check("E2001", "terminal", employee_repo=EmployeeRepository.from_dir(tmp_path))
+
+    assert result["held"] == 1  # "Terminal" counts toward the cap
+    assert result["status"] == "refresh_not_due"  # role " Executive" resolves to executive
 
 
 def test_data_conflict_unknown_role(check):

@@ -1,3 +1,4 @@
+import json
 import re
 
 import pytest
@@ -54,9 +55,8 @@ def test_employee_repository_get(data_dir):
 
 
 def test_employee_repository_rejects_duplicate_ids(tmp_path):
-    (tmp_path / "employees.jsonl").write_text(
-        '{"employee_id": "E1001"}\n{"employee_id": "E1001"}\n'
-    )
+    row = {"employee_id": "E1001", "name": "A", "role": "netrunner", "hire_date": "2020-01-01"}
+    (tmp_path / "employees.jsonl").write_text((json.dumps(row) + "\n") * 2)
 
     with pytest.raises(JsonlError, match="duplicate employee_id E1001"):
         EmployeeRepository.from_dir(tmp_path)
@@ -78,3 +78,66 @@ def test_seed_policies_cover_every_role_and_item():
 
     assert len(rows) == 24
     assert len(pairs) == 24  # no duplicates
+
+
+# --- employee record validation: bad records fail at load, with the employee named ---
+
+
+def _write_employee(directory, **overrides):
+    unit = {"asset_id": "MT-1", "item": "terminal", "issued_date": "2025-01-01"}
+    row = {
+        "employee_id": "E2001",
+        "name": "Test Subject",
+        "role": "netrunner",
+        "hire_date": "2020-01-01",
+        "equipment": [unit],
+    }
+    row.update(overrides)
+    (directory / "employees.jsonl").write_text(json.dumps(row) + "\n")
+
+
+def test_employee_repository_normalizes_role_and_item_names(tmp_path):
+    unit = {"asset_id": "MT-1", "item": " Terminal ", "issued_date": "2025-01-01"}
+    _write_employee(tmp_path, role="Netrunner ", equipment=[unit])
+
+    record = EmployeeRepository.from_dir(tmp_path).get("E2001")
+
+    assert record["role"] == "netrunner"
+    assert record["equipment"][0]["item"] == "terminal"
+
+
+def test_employee_repository_defaults_equipment_to_empty(tmp_path):
+    row = {"employee_id": "E2001", "name": "T", "role": "netrunner", "hire_date": "2020-01-01"}
+    (tmp_path / "employees.jsonl").write_text(json.dumps(row) + "\n")
+
+    assert EmployeeRepository.from_dir(tmp_path).get("E2001")["equipment"] == []
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"role": ""}, "role must be a non-empty string"),
+        ({"role": None}, "role must be a non-empty string"),
+        ({"hire_date": "2020-13-01"}, "hire_date: expected a YYYY-MM-DD date"),
+        ({"hire_date": "20200101"}, "hire_date: expected a YYYY-MM-DD date"),
+        ({"equipment": {}}, "equipment must be a list"),
+        ({"equipment": ["terminal"]}, "equipment entries must be objects"),
+        ({"equipment": [{"asset_id": "MT-1", "item": "terminal"}]}, "missing issued_date"),
+        ({"equipment": [{"asset_id": "MT-1", "item": "combat_drone",
+                         "issued_date": "2025-01-01"}]}, "unknown item 'combat_drone'"),
+        ({"equipment": [{"asset_id": "MT-1", "item": "terminal",
+                         "issued_date": "2025-02-30"}]}, "MT-1: issued_date"),
+    ],
+)  # fmt: skip
+def test_employee_repository_rejects_malformed_records(tmp_path, overrides, message):
+    _write_employee(tmp_path, **overrides)
+
+    with pytest.raises(JsonlError, match=message):
+        EmployeeRepository.from_dir(tmp_path)
+
+
+def test_employee_repository_rejects_missing_fields(tmp_path):
+    (tmp_path / "employees.jsonl").write_text('{"employee_id": "E2001", "name": "T"}\n')
+
+    with pytest.raises(JsonlError, match="'E2001': missing role, hire_date"):
+        EmployeeRepository.from_dir(tmp_path)
