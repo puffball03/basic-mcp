@@ -1,4 +1,4 @@
-"""Closed vocabularies from the requirements: the item catalog (§3) and roles (§2)."""
+"""The closed item catalog (requirements §3). Roles live in policies.jsonl, not here."""
 
 CATALOG: tuple[str, ...] = (
     "terminal",
@@ -7,13 +7,6 @@ CATALOG: tuple[str, ...] = (
     "gesture_band",
     "neural_headset",
     "cyberdeck",
-)
-
-ROLES: tuple[str, ...] = (
-    "corpo_staff",
-    "cyberware_tech",
-    "executive",
-    "netrunner",
 )
 
 

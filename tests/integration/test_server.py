@@ -7,7 +7,7 @@ import sys
 import pytest
 from mcp import Client, StdioServerParameters
 
-from militech_equipment.catalog import ROLES
+from militech_equipment.repository import PolicyRepository
 
 
 @pytest.fixture
@@ -50,13 +50,14 @@ async def test_get_employee_info_error_survives_protocol(server_params):
     assert _payload(result) == {"error": "employee_not_found", "employee_id": "E9999"}
 
 
-async def test_get_policy_limits_is_registered(server_params):
+async def test_get_policy_limits_is_registered(server_params, data_dir):
     async with Client(server_params) as client:
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
     tool = tools["get_policy_limits"]
     assert tool.input_schema["required"] == ["role"]
-    assert all(role in tool.description for role in ROLES)
+    # The description lists the roles the policy data defines, not a hardcoded list.
+    assert all(role in tool.description for role in PolicyRepository.from_dir(data_dir).roles())
 
 
 async def test_get_policy_limits_round_trip(server_params):
