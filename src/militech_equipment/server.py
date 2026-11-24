@@ -9,7 +9,8 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
-from militech_equipment import employees, policies
+from militech_equipment import eligibility, employees, policies
+from militech_equipment.catalog import CATALOG
 
 server = MCPServer(
     "militech-equipment",
@@ -20,13 +21,15 @@ server = MCPServer(
 )
 
 
-@server.tool()
+@server.tool(
+    description=(
+        "Return an employee's name, role, tenure in months, and equipment on file "
+        "(asset_id, item, issued_date per unit).\n\n"
+        "employee_id: Militech employee ID in the form E#### (e.g. E1004).\n"
+        'Returns {"error": "employee_not_found" | "invalid_employee_id", ...} on bad input.'
+    )
+)
 def get_employee_info(employee_id: str) -> dict[str, Any]:
-    """Return an employee's name, role, tenure in months, and equipment on file.
-
-    employee_id: Militech employee ID in the form E#### (e.g. E1004).
-    Returns {"error": "employee_not_found" | "invalid_employee_id", ...} on bad input.
-    """
     return employees.get_employee_info(employee_id)
 
 
@@ -41,6 +44,24 @@ def get_employee_info(employee_id: str) -> dict[str, Any]:
 )
 def get_policy_limits(role: str) -> dict[str, Any]:
     return policies.get_policy_limits(role)
+
+
+@server.tool(
+    description=(
+        "Check whether an employee may receive one more of a catalog item, as of today. "
+        "Read-only: records nothing.\n\n"
+        "employee_id: Militech employee ID in the form E#### (e.g. E1004).\n"
+        f"item: one of {', '.join(CATALOG)} (case-insensitive). "
+        'Map plain words first, e.g. "laptop" -> terminal.\n'
+        "status: within_policy, refresh_not_due, not_entitled, off_catalog, "
+        "employee_not_found, or data_conflict.\n"
+        "Below the cap the request is read as an additional unit; at the cap, as a replacement "
+        "of the oldest unit (see request_type_assumed and next_eligible_date).\n"
+        'Returns {"error": "invalid_employee_id" | "invalid_item", ...} on malformed input.'
+    )
+)
+def check_request_eligibility(employee_id: str, item: str) -> dict[str, Any]:
+    return eligibility.check_request_eligibility(employee_id, item)
 
 
 def main() -> None:

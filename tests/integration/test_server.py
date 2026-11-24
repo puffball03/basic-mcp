@@ -7,6 +7,7 @@ import sys
 import pytest
 from mcp import Client, StdioServerParameters
 
+from militech_equipment.catalog import CATALOG
 from militech_equipment.repository import PolicyRepository
 
 
@@ -29,8 +30,10 @@ async def test_get_employee_info_is_registered(server_params):
     async with Client(server_params) as client:
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
-    assert "get_employee_info" in tools
-    assert tools["get_employee_info"].input_schema["required"] == ["employee_id"]
+    tool = tools["get_employee_info"]
+    assert tool.input_schema["required"] == ["employee_id"]
+    assert "E####" in tool.description
+    assert "\n    " not in tool.description  # explicit description=, not a docstring
 
 
 async def test_get_employee_info_round_trip(server_params):
@@ -74,3 +77,36 @@ async def test_get_policy_limits_error_survives_protocol(server_params):
         result = await client.call_tool("get_policy_limits", {"role": "fixer"})
 
     assert _payload(result)["error"] == "unknown_role"
+
+
+async def test_check_request_eligibility_is_registered(server_params):
+    async with Client(server_params) as client:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    tool = tools["check_request_eligibility"]
+    assert tool.input_schema["required"] == ["employee_id", "item"]
+    # The description lists the catalog from CATALOG, not a hand-typed copy, and carries no
+    # docstring indentation into what the LLM reads.
+    assert all(item in tool.description for item in CATALOG)
+    assert "\n    " not in tool.description
+
+
+async def test_check_request_eligibility_round_trip(server_params):
+    # Demo 2: not entitled regardless of date, so this holds whatever "today" is.
+    async with Client(server_params) as client:
+        result = await client.call_tool(
+            "check_request_eligibility", {"employee_id": "E1003", "item": "cyberdeck"}
+        )
+
+    payload = _payload(result)
+    assert payload["status"] == "not_entitled"
+    assert payload["eligible"] is False
+
+
+async def test_check_request_eligibility_off_catalog_survives_protocol(server_params):
+    async with Client(server_params) as client:
+        result = await client.call_tool(
+            "check_request_eligibility", {"employee_id": "E1004", "item": "combat drone"}
+        )
+
+    assert _payload(result)["status"] == "off_catalog"
