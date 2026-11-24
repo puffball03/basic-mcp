@@ -7,6 +7,8 @@ import sys
 import pytest
 from mcp import Client, StdioServerParameters
 
+from militech_equipment.catalog import ROLES
+
 
 @pytest.fixture
 def server_params(data_dir) -> StdioServerParameters:
@@ -52,7 +54,9 @@ async def test_get_policy_limits_is_registered(server_params):
     async with Client(server_params) as client:
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
-    assert tools["get_policy_limits"].input_schema["required"] == ["role"]
+    tool = tools["get_policy_limits"]
+    assert tool.input_schema["required"] == ["role"]
+    assert all(role in tool.description for role in ROLES)
 
 
 async def test_get_policy_limits_round_trip(server_params):
