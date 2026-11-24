@@ -36,7 +36,7 @@ async def test_get_employee_info_round_trip(server_params):
         result = await client.call_tool("get_employee_info", {"employee_id": "E1004"})
 
     info = _payload(result)
-    assert info["handle"] == "Static"
+    assert info["name"] == "Kira Vasquez"
     assert info["role"] == "netrunner"
     assert len(info["equipment"]) == 6
 

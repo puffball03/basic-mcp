@@ -117,7 +117,7 @@ Every tool returns a JSON object. Expected failures come back as
 
 | Tool | Returns | Side effect |
 |---|---|---|
-| `get_employee_info(employee_id)` | `employee_id, name, handle, role, hire_date, tenure_months, equipment[{asset_id, item, issued_date}]` | none |
+| `get_employee_info(employee_id)` | `employee_id, name, role, hire_date, tenure_months, equipment[{asset_id, item, issued_date}]` | none |
 | `get_policy_limits(role)` | `role, limits{item: {max_quantity, refresh_months}}` | none |
 | `check_request_eligibility(employee_id, item)` | `eligible, status, item, held, max_quantity, refresh_months, oldest_issued, next_eligible_date, request_type_assumed` | none |
 | `flag_for_human_review(employee_id, request, reason, reason_code)` | `ticket_id, status: "open", created_at` | appends to `escalations.jsonl` |

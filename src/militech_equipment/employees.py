@@ -54,7 +54,6 @@ def get_employee_info(
     return {
         "employee_id": normalized,
         "name": record["name"],
-        "handle": record["handle"],
         "role": record["role"],
         "hire_date": record["hire_date"],
         "tenure_months": months_between(hire_date, today),

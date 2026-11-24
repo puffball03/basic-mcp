@@ -15,7 +15,6 @@ def test_returns_profile_tenure_and_equipment(repo, as_of):
     assert info == {
         "employee_id": "E1002",
         "name": "Mina Castellano",
-        "handle": "Ledger",
         "role": "corpo_staff",
         "hire_date": "2023-08-21",
         "tenure_months": 39,
@@ -73,5 +72,5 @@ def test_defaults_to_today_and_seed_data(monkeypatch, data_dir):
 
     info = get_employee_info("E1001")
 
-    assert info["handle"] == "Patch"
+    assert info["name"] == "Reyes Okafor"
     assert isinstance(info["tenure_months"], int)

@@ -49,7 +49,7 @@ def test_append_jsonl_creates_file_and_appends(tmp_path):
 def test_employee_repository_get(data_dir):
     repo = EmployeeRepository.from_dir(data_dir)
 
-    assert repo.get("E1004")["handle"] == "Static"
+    assert repo.get("E1004")["name"] == "Kira Vasquez"
     assert repo.get("E9999") is None
 
 
