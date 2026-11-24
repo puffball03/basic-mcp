@@ -7,6 +7,8 @@ import sys
 import pytest
 from mcp import Client, StdioServerParameters
 
+from militech_equipment.repository import PolicyRepository
+
 
 @pytest.fixture
 def server_params(data_dir) -> StdioServerParameters:
@@ -46,3 +48,29 @@ async def test_get_employee_info_error_survives_protocol(server_params):
         result = await client.call_tool("get_employee_info", {"employee_id": "E9999"})
 
     assert _payload(result) == {"error": "employee_not_found", "employee_id": "E9999"}
+
+
+async def test_get_policy_limits_is_registered(server_params, data_dir):
+    async with Client(server_params) as client:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    tool = tools["get_policy_limits"]
+    assert tool.input_schema["required"] == ["role"]
+    # The description lists the roles the policy data defines, not a hardcoded list.
+    assert all(role in tool.description for role in PolicyRepository.from_dir(data_dir).roles())
+
+
+async def test_get_policy_limits_round_trip(server_params):
+    async with Client(server_params) as client:
+        result = await client.call_tool("get_policy_limits", {"role": "netrunner"})
+
+    limits = _payload(result)["limits"]
+    assert len(limits) == 6
+    assert limits["cyberdeck"] == {"max_quantity": 1, "refresh_months": 18, "entitled": True}
+
+
+async def test_get_policy_limits_error_survives_protocol(server_params):
+    async with Client(server_params) as client:
+        result = await client.call_tool("get_policy_limits", {"role": "fixer"})
+
+    assert _payload(result)["error"] == "unknown_role"
