@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from militech_equipment.catalog import CATALOG
+
 DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 
 
@@ -65,3 +67,36 @@ class EmployeeRepository:
 
     def get(self, employee_id: str) -> dict[str, Any] | None:
         return self.employees.get(employee_id)
+
+
+@dataclass(frozen=True)
+class PolicyRepository:
+    """Policy rules from policies.jsonl, keyed by (role, item)."""
+
+    rules: dict[tuple[str, str], dict[str, int]]
+
+    @classmethod
+    def from_dir(cls, directory: Path | None = None) -> "PolicyRepository":
+        directory = Path(directory) if directory is not None else data_dir()
+        rules: dict[tuple[str, str], dict[str, int]] = {}
+        for row in load_jsonl(directory / "policies.jsonl"):
+            role, item = row["role"], row["item"]
+            key = f"{role}/{item}"
+            if item not in CATALOG:
+                raise JsonlError(f"policies.jsonl: {key}: unknown item {item}")
+            if (role, item) in rules:
+                raise JsonlError(f"policies.jsonl: duplicate rule {key}")
+            max_quantity, refresh_months = row["max_quantity"], row["refresh_months"]
+            if not all(isinstance(n, int) and n >= 0 for n in (max_quantity, refresh_months)):
+                raise JsonlError(f"policies.jsonl: {key}: limits must be non-negative integers")
+            rules[(role, item)] = {"max_quantity": max_quantity, "refresh_months": refresh_months}
+        return cls(rules)
+
+    def roles(self) -> list[str]:
+        return list(dict.fromkeys(role for role, _ in self.rules))
+
+    def limits_for(self, role: str) -> dict[str, dict[str, int]] | None:
+        """Every catalog item's rule for `role`, in catalog order; None if the role is unknown."""
+        if role not in self.roles():
+            return None
+        return {item: self.rules[(role, item)] for item in CATALOG if (role, item) in self.rules}
