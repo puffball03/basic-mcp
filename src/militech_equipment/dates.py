@@ -8,6 +8,11 @@ import calendar
 from datetime import date
 
 
+def today() -> date:
+    """The current date. The one place "now" is read, so tests can pin it with monkeypatch."""
+    return date.today()
+
+
 def add_months(start: date, months: int) -> date:
     """Return `start` shifted forward by `months` calendar months, clamping the day."""
     month_index = start.month - 1 + months

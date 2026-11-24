@@ -4,6 +4,7 @@ import re
 from datetime import date
 from typing import Any
 
+from militech_equipment import dates
 from militech_equipment.dates import months_between
 from militech_equipment.repository import EmployeeRepository
 
@@ -38,7 +39,7 @@ def get_employee_info(
     if record is None:
         return {"error": "employee_not_found", "employee_id": normalized}
 
-    today = as_of or date.today()
+    today = as_of or dates.today()
     hire_date = date.fromisoformat(record["hire_date"])
     equipment = sorted(
         (

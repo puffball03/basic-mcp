@@ -15,6 +15,7 @@ Held count is the units on file. Pending approvals from decisions.jsonl join it 
 from datetime import date
 from typing import Any
 
+from militech_equipment import dates
 from militech_equipment.catalog import CATALOG, normalize_name
 from militech_equipment.dates import add_months
 from militech_equipment.employees import normalize_employee_id
@@ -59,7 +60,7 @@ def check_request_eligibility(
     if limits is None:
         return outcome("data_conflict", conflict="unknown_role", role=role)
 
-    today = as_of or date.today()
+    today = as_of or dates.today()
     issued = sorted(
         date.fromisoformat(unit["issued_date"])
         for unit in record.get("equipment", [])
