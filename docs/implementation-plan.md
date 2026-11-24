@@ -99,12 +99,12 @@ Tests are written first in `tests/unit/test_repository.py` and `test_employees.p
 
 - The loader parses `employees.jsonl` and `policies.jsonl`. A malformed line raises with the line number.
 - `add_months` / `months_between`: normal dates, end of month (Jan 31 + 1 month → Feb 28/29), and leap years.
-- `get_employee_info("E1001", as_of=…)` returns role, handle, `tenure_months` and equipment.
+- `get_employee_info("E1001", as_of=…)` returns name, role, `tenure_months` and equipment.
 - Unknown ID → `{"error": "employee_not_found", "employee_id": "E9999"}`.
 - Malformed ID (`""`, `"1001"`, `None`-ish) → `{"error": "invalid_employee_id"}`.
 - Employee with no equipment → `equipment: []`.
 
-Seed: 8 employees with cyberpunk names and handles, built to support the 6 demos plus edge cases.
+Seed: 8 employees, built to support the 6 demos plus edge cases.
 One record has a future `issued_date` (for `DATA_CONFLICT`) and one has an unknown role.
 Then wrap the function as an MCP tool and call it from a client script (Suggested Approach step 3).
 
