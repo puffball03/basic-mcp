@@ -30,8 +30,10 @@ async def test_get_employee_info_is_registered(server_params):
     async with Client(server_params) as client:
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
-    assert "get_employee_info" in tools
-    assert tools["get_employee_info"].input_schema["required"] == ["employee_id"]
+    tool = tools["get_employee_info"]
+    assert tool.input_schema["required"] == ["employee_id"]
+    assert "E####" in tool.description
+    assert "\n    " not in tool.description  # explicit description=, not a docstring
 
 
 async def test_get_employee_info_round_trip(server_params):

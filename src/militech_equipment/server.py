@@ -21,13 +21,15 @@ server = MCPServer(
 )
 
 
-@server.tool()
+@server.tool(
+    description=(
+        "Return an employee's name, role, tenure in months, and equipment on file "
+        "(asset_id, item, issued_date per unit).\n\n"
+        "employee_id: Militech employee ID in the form E#### (e.g. E1004).\n"
+        'Returns {"error": "employee_not_found" | "invalid_employee_id", ...} on bad input.'
+    )
+)
 def get_employee_info(employee_id: str) -> dict[str, Any]:
-    """Return an employee's name, role, tenure in months, and equipment on file.
-
-    employee_id: Militech employee ID in the form E#### (e.g. E1004).
-    Returns {"error": "employee_not_found" | "invalid_employee_id", ...} on bad input.
-    """
     return employees.get_employee_info(employee_id)
 
 
