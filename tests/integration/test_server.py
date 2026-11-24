@@ -7,6 +7,7 @@ import sys
 import pytest
 from mcp import Client, StdioServerParameters
 
+from militech_equipment.catalog import CATALOG
 from militech_equipment.repository import PolicyRepository
 
 
@@ -80,7 +81,12 @@ async def test_check_request_eligibility_is_registered(server_params):
     async with Client(server_params) as client:
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
-    assert tools["check_request_eligibility"].input_schema["required"] == ["employee_id", "item"]
+    tool = tools["check_request_eligibility"]
+    assert tool.input_schema["required"] == ["employee_id", "item"]
+    # The description lists the catalog from CATALOG, not a hand-typed copy, and carries no
+    # docstring indentation into what the LLM reads.
+    assert all(item in tool.description for item in CATALOG)
+    assert "\n    " not in tool.description
 
 
 async def test_check_request_eligibility_round_trip(server_params):
