@@ -17,13 +17,14 @@ def _load_repo(directory: Path) -> PolicyRepository:
     return PolicyRepository.from_dir(directory)
 
 
-def _repo(repo: PolicyRepository | None) -> PolicyRepository:
+def policy_repo(repo: PolicyRepository | None = None) -> PolicyRepository:
+    """`repo` if given, else the cached policies for the current data directory."""
     return repo or _load_repo(data_dir())
 
 
 def known_roles(*, repo: PolicyRepository | None = None) -> list[str]:
     """The roles the policy data defines, in file order."""
-    return _repo(repo).roles()
+    return policy_repo(repo).roles()
 
 
 def get_policy_limits(role: Any, *, repo: PolicyRepository | None = None) -> dict[str, Any]:
@@ -35,7 +36,7 @@ def get_policy_limits(role: Any, *, repo: PolicyRepository | None = None) -> dic
     if normalized is None:  # reject non-string / blank input before touching the data file
         return {"error": "unknown_role", "role": role, "message": "role must be a non-empty string"}
 
-    policies = _repo(repo)
+    policies = policy_repo(repo)
     limits = policies.limits_for(normalized)
     if limits is None:
         return {"error": "unknown_role", "role": role, "known_roles": policies.roles()}

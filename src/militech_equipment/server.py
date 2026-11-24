@@ -9,7 +9,7 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
-from militech_equipment import employees, policies
+from militech_equipment import eligibility, employees, policies
 
 server = MCPServer(
     "militech-equipment",
@@ -41,6 +41,20 @@ def get_employee_info(employee_id: str) -> dict[str, Any]:
 )
 def get_policy_limits(role: str) -> dict[str, Any]:
     return policies.get_policy_limits(role)
+
+
+@server.tool()
+def check_request_eligibility(employee_id: str, item: str) -> dict[str, Any]:
+    """Check whether an employee may receive one more of a catalog item, as of today.
+
+    employee_id: E#### ID. item: an exact catalog name (terminal, holo_display, haptic_keyboard,
+    gesture_band, neural_headset, cyberdeck); map plain words like "laptop" first.
+    status is one of within_policy, refresh_not_due, not_entitled, off_catalog,
+    employee_not_found, data_conflict. Below the cap the request is read as an additional
+    unit; at the cap, as a replacement of the oldest unit (see request_type_assumed and
+    next_eligible_date). This tool only checks; it records nothing.
+    """
+    return eligibility.check_request_eligibility(employee_id, item)
 
 
 def main() -> None:

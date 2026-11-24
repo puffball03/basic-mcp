@@ -74,3 +74,31 @@ async def test_get_policy_limits_error_survives_protocol(server_params):
         result = await client.call_tool("get_policy_limits", {"role": "fixer"})
 
     assert _payload(result)["error"] == "unknown_role"
+
+
+async def test_check_request_eligibility_is_registered(server_params):
+    async with Client(server_params) as client:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    assert tools["check_request_eligibility"].input_schema["required"] == ["employee_id", "item"]
+
+
+async def test_check_request_eligibility_round_trip(server_params):
+    # Demo 2: not entitled regardless of date, so this holds whatever "today" is.
+    async with Client(server_params) as client:
+        result = await client.call_tool(
+            "check_request_eligibility", {"employee_id": "E1003", "item": "cyberdeck"}
+        )
+
+    payload = _payload(result)
+    assert payload["status"] == "not_entitled"
+    assert payload["eligible"] is False
+
+
+async def test_check_request_eligibility_off_catalog_survives_protocol(server_params):
+    async with Client(server_params) as client:
+        result = await client.call_tool(
+            "check_request_eligibility", {"employee_id": "E1004", "item": "combat drone"}
+        )
+
+    assert _payload(result)["status"] == "off_catalog"
