@@ -1,12 +1,19 @@
-"""The six acceptance demos (requirements §9), driven through the MCP tools by hand.
+"""The six acceptance demos (requirements §9), driven in-process through the MCP tools by hand.
 
 Each test makes the tool calls a well-behaved agent should make for that demo, on the pinned
 2026-11-23, and checks the server leads to the expected outcome. When the agent arrives
 (M8–M12) it must reach the same outcomes; these tests show the server alone supports them.
-Fixtures `connect` and `pin_today` live in tests/integration/conftest.py.
+
+In-process: `Client(server)` connects to the server object in this process, so the clock can
+be pinned (and moved) with monkeypatch. Each test runs in both of the SDK's in-process modes:
+  - "legacy": in-memory streams carrying real JSON-RPC, initialize handshake included.
+  - "auto":   the SDK's direct dispatcher (no streams or framing), the default path.
+Fixtures `connect` and `pin_today` live in tests/integration/conftest.py. Starting the server
+for real (`python -m`, stdio, env handoff) is covered by test_server.py.
 """
 
 import json
+from datetime import timedelta
 
 
 async def _call(client, tool: str, **arguments) -> dict:
@@ -36,6 +43,19 @@ async def test_demo_1_second_holo_display_is_approved(connect, data_dir):
     assert info["role"] == "cyberware_tech"
     assert (check["status"], check["request_type_assumed"]) == ("within_policy", "additional")
     assert decision["decision_id"] == "DEC-20261123-0001"
+
+
+async def test_demo_1_follow_up_a_third_display_is_not_eligible(connect):
+    async with connect() as client:
+        args = {"employee_id": "E1001", "item": "holo_display"}
+        await _call(client, "record_decision", **args, decision="approve",
+                    request_type="additional", reason="Second display")  # fmt: skip
+        again = await _call(client, "check_request_eligibility", **args)
+
+    # The approval now counts: 2 of 2 held, so a third reads as a replacement of the
+    # 2024-02-10 unit, which isn't due until 2027-02-10.
+    assert (again["held"], again["status"]) == (2, "refresh_not_due")
+    assert again["next_eligible_date"] == "2027-02-10"
 
 
 async def test_demo_2_corpo_cyberdeck_is_denied(connect, data_dir):
@@ -77,6 +97,7 @@ async def test_demo_3_emp_fried_terminal_is_escalated(connect, data_dir):
     assert (check["status"], check["next_eligible_date"]) == ("refresh_not_due", "2028-09-15")
     assert approve["error"] == "approval_not_permitted"  # policy says no; a human decides
     assert ticket["ticket_id"] == "ESC-20261123-0001"
+    assert ticket["created_at"] == "2026-11-23T12:00:00+00:00"  # the pinned clock, noon UTC
     assert _lines(data_dir / "decisions.jsonl") == []
 
 
@@ -135,7 +156,21 @@ async def test_demo_6_executive_terminal_replacement_is_approved(connect, data_d
         )  # fmt: skip
 
     assert (check["status"], check["request_type_assumed"]) == ("within_policy", "replacement")
+    assert check["next_eligible_date"] == "2026-05-20"  # issued 2024-11-20 + 18 months
     assert decision["decision_id"] == "DEC-20261123-0001"
+
+
+async def test_demo_6_follow_up_the_replacement_is_approved_only_once(connect):
+    async with connect() as client:
+        args = {"employee_id": "E1005", "item": "terminal", "decision": "approve",
+                "request_type": "replacement", "reason": "Past its 18-month refresh"}  # fmt: skip
+        first = await _call(client, "record_decision", **args)
+        second = await _call(client, "record_decision", **args)
+
+    # The approved replacement reset the terminal's date to today: next due in 18 months.
+    assert first["decision_id"] == "DEC-20261123-0001"
+    assert (second["error"], second["status"]) == ("approval_not_permitted", "refresh_not_due")
+    assert second["next_eligible_date"] == "2028-05-23"
 
 
 async def test_all_six_demos_in_one_session_leave_a_clean_audit_trail(connect, data_dir):
@@ -170,3 +205,25 @@ async def test_all_six_demos_in_one_session_leave_a_clean_audit_trail(connect, d
         "EXCEPTION_CLAIMED", "OFF_CATALOG", "EMPLOYEE_NOT_FOUND",
     ]  # fmt: skip
     assert [e["ticket_id"][-4:] for e in escalations] == ["0001", "0002", "0003"]
+
+
+# --- the pinned clock reaches the server (only possible in-process) ---
+
+
+async def test_tenure_uses_the_pinned_date(connect):
+    async with connect() as client:
+        info = await _call(client, "get_employee_info", employee_id="E1002")
+
+    assert info["tenure_months"] == 39  # hired 2023-08-21, as of 2026-11-23
+
+
+async def test_refresh_boundary_moves_with_the_pinned_date(connect, pin_today, as_of):
+    async with connect() as client:
+        # E1004's oldest holo-display hits its 24-month refresh exactly on as_of.
+        args = {"employee_id": "E1004", "item": "holo_display"}
+        on_the_day = await _call(client, "check_request_eligibility", **args)
+        pin_today(as_of - timedelta(days=1))
+        day_before = await _call(client, "check_request_eligibility", **args)
+
+    assert on_the_day["status"] == "within_policy"
+    assert day_before["status"] == "refresh_not_due"
