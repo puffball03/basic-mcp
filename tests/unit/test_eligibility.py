@@ -19,11 +19,16 @@ def policies(data_dir):
 
 
 @pytest.fixture
-def check(employees, policies, as_of):
-    def _check(employee_id, item, *, employee_repo=None):
+def check(monkeypatch, data_dir, employees, policies, as_of):
+    # Decisions default to <data dir>/decisions.jsonl: point that at the temp copy, never ./data.
+    monkeypatch.setenv("MILITECH_DATA_DIR", str(data_dir))
+
+    def _check(employee_id, item, *, employee_repo=None, decisions=None):
+        extra = {} if decisions is None else {"decisions": decisions}
         return check_request_eligibility(
-            employee_id, item, employees=employee_repo or employees, policies=policies, as_of=as_of
-        )
+            employee_id, item, employees=employee_repo or employees, policies=policies,
+            as_of=as_of, **extra,
+        )  # fmt: skip
 
     return _check
 
@@ -244,3 +249,76 @@ def test_defaults_to_seed_data_and_today(monkeypatch, data_dir):
     monkeypatch.setenv("MILITECH_DATA_DIR", str(data_dir))
 
     assert check_request_eligibility("E1003", "cyberdeck")["status"] == "not_entitled"
+
+
+# --- pending approvals from decisions.jsonl (requirements §4.2 step 5) ---
+
+
+def _decision(employee_id, item, decision="approve", request_type="additional",
+              created_at="2026-11-23T14:05:00+00:00", n=1):  # fmt: skip
+    return {"decision_id": f"DEC-{created_at[:10].replace('-', '')}-{n:04d}",
+            "employee_id": employee_id, "item": item, "decision": decision,
+            "request_type": request_type, "reason": "test", "created_at": created_at}  # fmt: skip
+
+
+def test_approved_additional_counts_toward_the_cap(check):
+    # After demo 1's approval the tech holds 2 of 2, so a third request reads as a
+    # replacement of the 2024-02-10 unit, which isn't due until 2027-02-10.
+    result = check("E1001", "holo_display", decisions=[_decision("E1001", "holo_display")])
+
+    assert result["held"] == 2
+    assert result["request_type_assumed"] == "replacement"
+    assert result["status"] == "refresh_not_due"
+    assert result["next_eligible_date"] == "2027-02-10"
+
+
+def test_approved_additional_unit_is_dated_by_the_decision(check):
+    approved = _decision("E1006", "cyberdeck", created_at="2026-01-01T09:00:00+00:00")
+
+    result = check("E1006", "cyberdeck", decisions=[approved])
+
+    assert result["oldest_issued"] == "2026-01-01"
+    assert result["next_eligible_date"] == "2027-07-01"  # + 18 months
+    assert result["status"] == "refresh_not_due"
+
+
+def test_approved_replacement_resets_the_oldest_unit(check):
+    # Demo 6 approved; asking again straight away is no longer within policy.
+    replaced = _decision("E1005", "terminal", request_type="replacement")
+
+    result = check("E1005", "terminal", decisions=[replaced])
+
+    assert result["held"] == 1
+    assert result["oldest_issued"] == "2026-11-23"
+    assert result["status"] == "refresh_not_due"
+    assert result["next_eligible_date"] == "2028-05-23"
+
+
+def test_replacement_moves_on_to_the_next_oldest_unit(check):
+    # E1004's 2024-11-23 holo-display is replaced; the oldest is now 2025-04-02.
+    replaced = _decision("E1004", "holo_display", request_type="replacement")
+
+    result = check("E1004", "holo_display", decisions=[replaced])
+
+    assert result["held"] == 3
+    assert result["oldest_issued"] == "2025-04-02"
+    assert result["next_eligible_date"] == "2027-04-02"
+
+
+@pytest.mark.parametrize(
+    "decision",
+    [
+        _decision("E1001", "holo_display", decision="deny"),  # denials hold nothing
+        _decision("E1002", "holo_display"),  # another employee
+        _decision("E1001", "terminal"),  # another item
+    ],
+)
+def test_unrelated_decisions_are_ignored(check, decision):
+    assert check("E1001", "holo_display", decisions=[decision])["held"] == 1
+
+
+def test_decisions_default_to_the_data_dir(check, data_dir):
+    approved = _decision("E1001", "holo_display")
+    (data_dir / "decisions.jsonl").write_text(json.dumps(approved) + "\n")
+
+    assert check("E1001", "holo_display")["held"] == 2

@@ -4,7 +4,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +59,21 @@ def append_jsonl(path: Path, record: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record) + "\n")
+
+
+def next_daily_id(path: Path, prefix: str, key: str, when: datetime) -> str:
+    """Next `<prefix>-YYYYMMDD-NNNN` for `when`'s date, numbered after the file's highest.
+
+    Not locked: two writers at the same instant could pick the same number.
+    """
+    day_prefix = f"{prefix}-{when:%Y%m%d}-"
+    pattern = re.compile(re.escape(day_prefix) + r"(\d{4})")
+    taken = [
+        int(match.group(1))
+        for record in load_jsonl(path)
+        if (match := pattern.fullmatch(str(record.get(key, ""))))
+    ]
+    return f"{day_prefix}{max(taken, default=0) + 1:04d}"
 
 
 @dataclass(frozen=True)

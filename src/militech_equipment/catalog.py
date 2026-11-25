@@ -15,3 +15,10 @@ def normalize_name(raw: object) -> str | None:
     if not isinstance(raw, str):
         return None
     return raw.strip().lower() or None
+
+
+def clean_text(raw: object) -> str | None:
+    """Trimmed free text, or None if it isn't a non-blank string."""
+    if not isinstance(raw, str):
+        return None
+    return raw.strip() or None

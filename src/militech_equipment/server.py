@@ -9,7 +9,7 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
-from militech_equipment import eligibility, employees, escalations, policies
+from militech_equipment import decisions, eligibility, employees, escalations, policies
 from militech_equipment.catalog import CATALOG
 
 server = MCPServer(
@@ -82,6 +82,27 @@ def flag_for_human_review(
     employee_id: str, request: str, reason: str, reason_code: str
 ) -> dict[str, Any]:
     return escalations.flag_for_human_review(employee_id, request, reason, reason_code)
+
+
+@server.tool(
+    description=(
+        "Record a final approve or deny decision and append it to decisions.jsonl. Use it only "
+        "for clear-cut requests; escalate anything ambiguous with flag_for_human_review.\n\n"
+        "employee_id: Militech employee ID in the form E#### (e.g. E1004); must be on file.\n"
+        f"item: one of {', '.join(CATALOG)}.\n"
+        f"decision: {' or '.join(decisions.DECISIONS)}.\n"
+        f"request_type: {' or '.join(decisions.REQUEST_TYPES)} (what the employee asked for).\n"
+        "reason: the justification, including the deny code (NOT_ENTITLED, REFRESH_NOT_DUE, "
+        "QUANTITY_CAP_REACHED) when denying.\n"
+        "The server refuses an approve the policy doesn't allow right now: "
+        '{"error": "approval_not_permitted", "status": ...}, with nothing written. '
+        'Otherwise returns {"decision_id": "DEC-YYYYMMDD-NNNN", "created_at"}.'
+    )
+)
+def record_decision(
+    employee_id: str, item: str, decision: str, request_type: str, reason: str
+) -> dict[str, Any]:
+    return decisions.record_decision(employee_id, item, decision, request_type, reason)
 
 
 def main() -> None:

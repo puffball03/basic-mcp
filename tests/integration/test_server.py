@@ -9,6 +9,7 @@ import pytest
 from mcp import Client, StdioServerParameters
 
 from militech_equipment.catalog import CATALOG
+from militech_equipment.decisions import DECISIONS, REQUEST_TYPES
 from militech_equipment.escalations import REASON_CODES
 from militech_equipment.repository import PolicyRepository
 
@@ -150,3 +151,43 @@ async def test_flag_for_human_review_error_survives_protocol(server_params, data
 
     assert _payload(result)["error"] == "invalid_reason_code"
     assert not (data_dir / "escalations.jsonl").exists()
+
+
+async def test_record_decision_is_registered(server_params):
+    async with Client(server_params) as client:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    tool = tools["record_decision"]
+    assert tool.input_schema["required"] == [
+        "employee_id", "item", "decision", "request_type", "reason",
+    ]  # fmt: skip
+    assert all(word in tool.description for word in (*DECISIONS, *REQUEST_TYPES, *CATALOG))
+    assert "\n    " not in tool.description
+
+
+async def test_record_decision_deny_writes_to_the_data_dir(server_params, data_dir):
+    async with Client(server_params) as client:
+        result = await client.call_tool(
+            "record_decision",
+            {"employee_id": "E1003", "item": "cyberdeck", "decision": "deny",
+             "request_type": "additional", "reason": "Corpo staff are not entitled"},
+        )  # fmt: skip
+
+    decision = _payload(result)
+    assert re.fullmatch(r"DEC-\d{8}-0001", decision["decision_id"])
+    lines = (data_dir / "decisions.jsonl").read_text().splitlines()
+    assert [json.loads(line)["decision_id"] for line in lines] == [decision["decision_id"]]
+
+
+async def test_record_decision_guardrail_survives_protocol(server_params, data_dir):
+    # Demo 2 approved anyway: the server refuses, whatever the agent concluded.
+    async with Client(server_params) as client:
+        result = await client.call_tool(
+            "record_decision",
+            {"employee_id": "E1003", "item": "cyberdeck", "decision": "approve",
+             "request_type": "additional", "reason": "Wants one"},
+        )  # fmt: skip
+
+    payload = _payload(result)
+    assert (payload["error"], payload["status"]) == ("approval_not_permitted", "not_entitled")
+    assert not (data_dir / "decisions.jsonl").exists()

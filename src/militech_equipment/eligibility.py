@@ -9,10 +9,13 @@ Rule order (first match wins):
   6. held == max, oldest unit >= refresh_months old     -> within_policy (replacement)
      otherwise                                          -> refresh_not_due (+ next_eligible_date)
 
-Held count is the units on file. Pending approvals from decisions.jsonl join it in M6.
+Held count is the units on file plus approvals in decisions.jsonl (rule step 5): an approved
+additional unit counts as issued on the decision date, and an approved replacement resets
+the oldest unit's date to the decision date. Denials hold nothing.
 """
 
-from datetime import date
+from collections.abc import Iterable
+from datetime import date, datetime
 from typing import Any
 
 from militech_equipment import dates
@@ -23,7 +26,14 @@ from militech_equipment.employees import (
     normalize_employee_id,
 )
 from militech_equipment.policies import policy_repo
-from militech_equipment.repository import EmployeeRepository, PolicyRepository
+from militech_equipment.repository import (
+    EmployeeRepository,
+    PolicyRepository,
+    data_dir,
+    load_jsonl,
+)
+
+DECISIONS_FILE = "decisions.jsonl"
 
 # Every outcome carries these keys (None when they don't apply), so callers get one shape.
 _EMPTY_DETAILS: dict[str, Any] = {
@@ -44,6 +54,37 @@ def _outcome(
     return {**head, **_EMPTY_DETAILS, **details}
 
 
+def load_decisions() -> list[dict[str, Any]]:
+    """Every recorded decision in the current data directory (empty if none yet)."""
+    return load_jsonl(data_dir() / DECISIONS_FILE)
+
+
+def _held_dates(
+    units: Iterable[date], employee_id: str, item: str, decisions: Iterable[dict[str, Any]]
+) -> list[date]:
+    """Issue dates of the units this employee holds, with approved decisions applied in order."""
+    held = sorted(units)
+    approvals = sorted(
+        (
+            d
+            for d in decisions
+            if d.get("decision") == "approve"
+            and d.get("employee_id") == employee_id
+            and d.get("item") == item
+        ),
+        key=lambda d: d["created_at"],
+    )
+    for approval in approvals:
+        decided = datetime.fromisoformat(approval["created_at"]).date()
+        if approval.get("request_type") == "replacement":
+            if not held:
+                continue  # nothing to replace (record_decision refuses these)
+            held.pop(0)  # the oldest unit is swapped for a new one
+        held.append(decided)
+        held.sort()
+    return held
+
+
 def check_request_eligibility(
     employee_id: Any,
     item: Any,
@@ -51,6 +92,7 @@ def check_request_eligibility(
     employees: EmployeeRepository | None = None,
     policies: PolicyRepository | None = None,
     as_of: date | None = None,
+    decisions: Iterable[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Evaluate one request. Input errors come back as {"error": ...}; outcomes as a status."""
     normalized_id = normalize_employee_id(employee_id)
@@ -75,10 +117,15 @@ def check_request_eligibility(
         )
 
     today = as_of or dates.today()
-    issued = sorted(
-        date.fromisoformat(unit["issued_date"])
-        for unit in record["equipment"]
-        if unit["item"] == normalized_item
+    issued = _held_dates(
+        (
+            date.fromisoformat(unit["issued_date"])
+            for unit in record["equipment"]
+            if unit["item"] == normalized_item
+        ),
+        normalized_id,
+        normalized_item,
+        load_decisions() if decisions is None else decisions,
     )
     rule = limits[normalized_item]
     max_quantity, refresh_months = rule["max_quantity"], rule["refresh_months"]
