@@ -50,7 +50,7 @@ async def _call(client, tool: str, **arguments) -> dict:
     return json.loads(result.content[0].text)
 
 
-async def test_exactly_the_four_tools_are_registered(connect):
+async def test_exactly_the_five_tools_are_registered(connect):
     async with connect() as client:
         tools = (await client.list_tools()).tools
 
@@ -59,6 +59,7 @@ async def test_exactly_the_four_tools_are_registered(connect):
             "flag_for_human_review",
             "get_employee_info",
             "get_policy_limits",
+            "record_decision",
         ]
 
 
@@ -131,3 +132,28 @@ async def test_demo_3_escalation_tickets_use_the_pinned_date(connect, data_dir):
         assert second["ticket_id"] == "ESC-20261123-0002"
         assert first["created_at"] == "2026-11-23T12:00:00+00:00"
         assert len((data_dir / "escalations.jsonl").read_text().splitlines()) == 2
+
+
+async def test_demo_1_approval_then_a_repeat_request_is_not_eligible(connect):
+    async with connect() as client:
+        args = {"employee_id": "E1001", "item": "holo_display"}
+        before = await _call(client, "check_request_eligibility", **args)
+        decision = await _call(client, "record_decision", **args, decision="approve",
+                               request_type="additional", reason="Second display")  # fmt: skip
+        after = await _call(client, "check_request_eligibility", **args)
+
+        assert before["status"] == "within_policy"
+        assert decision["decision_id"] == "DEC-20261123-0001"
+        assert (after["held"], after["status"]) == (2, "refresh_not_due")
+
+
+async def test_demo_6_replacement_approved_once(connect):
+    async with connect() as client:
+        args = {"employee_id": "E1005", "item": "terminal", "decision": "approve",
+                "request_type": "replacement", "reason": "Past its 18-month refresh"}  # fmt: skip
+        first = await _call(client, "record_decision", **args)
+        second = await _call(client, "record_decision", **args)
+
+        assert first["decision_id"] == "DEC-20261123-0001"
+        assert (second["error"], second["status"]) == ("approval_not_permitted", "refresh_not_due")
+        assert second["next_eligible_date"] == "2028-05-23"
