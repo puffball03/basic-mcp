@@ -5,12 +5,17 @@ shorter, the day clamps to that month's last day (Jan 31 + 1 month -> Feb 28/29)
 """
 
 import calendar
-from datetime import date
+from datetime import UTC, date, datetime
 
 
 def today() -> date:
-    """The current date. The one place "now" is read, so tests can pin it with monkeypatch."""
+    """The current date. The one place "today" is read, so tests can pin it with monkeypatch."""
     return date.today()
+
+
+def now() -> datetime:
+    """The current instant in UTC (timezone-aware). Pinnable like today()."""
+    return datetime.now(UTC)
 
 
 def add_months(start: date, months: int) -> date:
