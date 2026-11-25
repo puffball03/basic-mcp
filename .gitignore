@@ -186,3 +186,6 @@ MCP-directions.pdf
 data/escalations.jsonl
 data/decisions.jsonl
 traces/
+
+# macOS Finder metadata
+.DS_Store
