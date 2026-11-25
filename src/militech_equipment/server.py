@@ -9,7 +9,7 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
-from militech_equipment import eligibility, employees, policies
+from militech_equipment import eligibility, employees, escalations, policies
 from militech_equipment.catalog import CATALOG
 
 server = MCPServer(
@@ -62,6 +62,26 @@ def get_policy_limits(role: str) -> dict[str, Any]:
 )
 def check_request_eligibility(employee_id: str, item: str) -> dict[str, Any]:
     return eligibility.check_request_eligibility(employee_id, item)
+
+
+@server.tool(
+    description=(
+        "Escalate a request to a human reviewer instead of deciding it. Opens a ticket and "
+        "appends it to escalations.jsonl.\n\n"
+        "employee_id: Militech employee ID in the form E#### (e.g. E1004); it need not be "
+        "on file.\n"
+        "request: the employee's request, as they stated it.\n"
+        "reason: why this needs a human, in a sentence.\n"
+        f"reason_code: one of {', '.join(escalations.REASON_CODES)}.\n"
+        'Returns {"ticket_id": "ESC-YYYYMMDD-NNNN", "status": "open", "created_at"}, or '
+        '{"error": "invalid_employee_id" | "missing_field" | "invalid_reason_code", ...} '
+        "with nothing written."
+    )
+)
+def flag_for_human_review(
+    employee_id: str, request: str, reason: str, reason_code: str
+) -> dict[str, Any]:
+    return escalations.flag_for_human_review(employee_id, request, reason, reason_code)
 
 
 def main() -> None:
