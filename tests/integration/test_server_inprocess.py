@@ -12,7 +12,7 @@ test_server.py.
 """
 
 import json
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
 import pytest
 from mcp import Client
@@ -23,10 +23,11 @@ from militech_equipment.server import server
 
 @pytest.fixture
 def pin_today(monkeypatch):
-    """Pin dates.today() to a given day; returns the setter so a test can move it."""
+    """Pin dates.today() and dates.now() to a given day (noon UTC); returns the setter."""
 
     def _pin(day: date) -> None:
         monkeypatch.setattr(dates, "today", lambda: day)
+        monkeypatch.setattr(dates, "now", lambda: datetime.combine(day, time(12), UTC))
 
     return _pin
 
@@ -49,12 +50,13 @@ async def _call(client, tool: str, **arguments) -> dict:
     return json.loads(result.content[0].text)
 
 
-async def test_exactly_the_three_tools_are_registered(connect):
+async def test_exactly_the_four_tools_are_registered(connect):
     async with connect() as client:
         tools = (await client.list_tools()).tools
 
         assert sorted(tool.name for tool in tools) == [
             "check_request_eligibility",
+            "flag_for_human_review",
             "get_employee_info",
             "get_policy_limits",
         ]
@@ -116,3 +118,16 @@ async def test_unknown_role_lists_known_roles(connect):
 
         assert result["error"] == "unknown_role"
         assert "netrunner" in result["known_roles"]
+
+
+async def test_demo_3_escalation_tickets_use_the_pinned_date(connect, data_dir):
+    async with connect() as client:
+        args = {"employee_id": "E1002", "request": "My terminal got fried by an EMP",
+                "reason": "Damaged", "reason_code": "EXCEPTION_CLAIMED"}  # fmt: skip
+        first = await _call(client, "flag_for_human_review", **args)
+        second = await _call(client, "flag_for_human_review", **args)
+
+        assert first["ticket_id"] == "ESC-20261123-0001"
+        assert second["ticket_id"] == "ESC-20261123-0002"
+        assert first["created_at"] == "2026-11-23T12:00:00+00:00"
+        assert len((data_dir / "escalations.jsonl").read_text().splitlines()) == 2

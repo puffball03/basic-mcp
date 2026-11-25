@@ -1,8 +1,8 @@
-from datetime import date
+from datetime import UTC, date, datetime
 
 import pytest
 
-from militech_equipment.dates import add_months, months_between, today
+from militech_equipment.dates import add_months, months_between, now, today
 
 
 def test_today_is_the_real_date():
@@ -11,6 +11,15 @@ def test_today_is_the_real_date():
     after = date.today()
 
     assert before <= result <= after  # bracketed, so a midnight rollover can't flake it
+
+
+def test_now_is_the_real_utc_instant():
+    before = datetime.now(UTC)
+    result = now()
+    after = datetime.now(UTC)
+
+    assert result.tzinfo is not None and result.utcoffset().total_seconds() == 0
+    assert before <= result <= after
 
 
 @pytest.mark.parametrize(

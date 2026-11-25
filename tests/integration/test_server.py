@@ -2,12 +2,14 @@
 
 import json
 import os
+import re
 import sys
 
 import pytest
 from mcp import Client, StdioServerParameters
 
 from militech_equipment.catalog import CATALOG
+from militech_equipment.escalations import REASON_CODES
 from militech_equipment.repository import PolicyRepository
 
 
@@ -110,3 +112,41 @@ async def test_check_request_eligibility_off_catalog_survives_protocol(server_pa
         )
 
     assert _payload(result)["status"] == "off_catalog"
+
+
+async def test_flag_for_human_review_is_registered(server_params):
+    async with Client(server_params) as client:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    tool = tools["flag_for_human_review"]
+    assert tool.input_schema["required"] == ["employee_id", "request", "reason", "reason_code"]
+    # Reason codes are listed from REASON_CODES, and no docstring indentation leaks through.
+    assert all(code in tool.description for code in REASON_CODES)
+    assert "\n    " not in tool.description
+
+
+async def test_flag_for_human_review_writes_to_the_data_dir(server_params, data_dir):
+    async with Client(server_params) as client:
+        result = await client.call_tool(
+            "flag_for_human_review",
+            {"employee_id": "E1004", "request": "I need a combat drone",
+             "reason": "Not a catalog item", "reason_code": "OFF_CATALOG"},
+        )  # fmt: skip
+
+    ticket = _payload(result)
+    assert re.fullmatch(r"ESC-\d{8}-0001", ticket["ticket_id"])
+    assert ticket["status"] == "open"
+
+    lines = (data_dir / "escalations.jsonl").read_text().splitlines()
+    assert [json.loads(line)["ticket_id"] for line in lines] == [ticket["ticket_id"]]
+
+
+async def test_flag_for_human_review_error_survives_protocol(server_params, data_dir):
+    async with Client(server_params) as client:
+        result = await client.call_tool(
+            "flag_for_human_review",
+            {"employee_id": "E1004", "request": "x", "reason": "y", "reason_code": "BOGUS"},
+        )
+
+    assert _payload(result)["error"] == "invalid_reason_code"
+    assert not (data_dir / "escalations.jsonl").exists()
