@@ -4,16 +4,28 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 
-from militech_equipment.catalog import CATALOG
+from militech_equipment.catalog import CATALOG, normalize_name
 
+ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 
 
 class JsonlError(ValueError):
     """A JSONL file is malformed; the message names the file and line."""
+
+
+def _check_iso_date(value: Any, where: str) -> None:
+    """Raise JsonlError unless `value` is a YYYY-MM-DD string."""
+    try:
+        if not (isinstance(value, str) and ISO_DATE.fullmatch(value)):
+            raise ValueError
+        date.fromisoformat(value)  # also rejects impossible dates like 2025-13-01
+    except ValueError:
+        raise JsonlError(f"{where}: expected a YYYY-MM-DD date, got {value!r}") from None
 
 
 def data_dir() -> Path:
@@ -51,20 +63,57 @@ def append_jsonl(path: Path, record: dict[str, Any]) -> None:
 
 @dataclass(frozen=True)
 class EmployeeRepository:
-    """Employees from employees.jsonl, keyed by employee_id."""
+    """Employees from employees.jsonl, keyed by employee_id.
+
+    Records are validated and normalized at load (role and item names lowercased, dates
+    checked as ISO), so tools can trust their shape. Policy questions (unknown role, future
+    issued_date, held above cap) are left for check_request_eligibility to report.
+    """
 
     employees: dict[str, dict[str, Any]]
+
+    REQUIRED_FIELDS = ("employee_id", "name", "role", "hire_date")
+    UNIT_FIELDS = ("asset_id", "item", "issued_date")
 
     @classmethod
     def from_dir(cls, directory: Path | None = None) -> "EmployeeRepository":
         directory = Path(directory) if directory is not None else data_dir()
         employees: dict[str, dict[str, Any]] = {}
         for row in load_jsonl(directory / "employees.jsonl"):
-            employee_id = row["employee_id"]
+            employee_id = row.get("employee_id")
             if employee_id in employees:
                 raise JsonlError(f"employees.jsonl: duplicate employee_id {employee_id}")
-            employees[employee_id] = row
+            employees[employee_id] = cls._validated(row)
         return cls(employees)
+
+    @classmethod
+    def _validated(cls, row: dict[str, Any]) -> dict[str, Any]:
+        where = f"employees.jsonl: {row.get('employee_id')!r}"
+        missing = [field for field in cls.REQUIRED_FIELDS if field not in row]
+        if missing:
+            raise JsonlError(f"{where}: missing {', '.join(missing)}")
+        role = normalize_name(row["role"])
+        if role is None:
+            raise JsonlError(f"{where}: role must be a non-empty string")
+        _check_iso_date(row["hire_date"], f"{where}: hire_date")
+
+        equipment = row.get("equipment", [])
+        if not isinstance(equipment, list):
+            raise JsonlError(f"{where}: equipment must be a list")
+        units = []
+        for unit in equipment:
+            if not isinstance(unit, dict):
+                raise JsonlError(f"{where}: equipment entries must be objects")
+            missing = [field for field in cls.UNIT_FIELDS if field not in unit]
+            if missing:
+                raise JsonlError(f"{where}: equipment unit missing {', '.join(missing)}")
+            unit_where = f"{where}: {unit['asset_id']}"
+            item = normalize_name(unit["item"])
+            if item not in CATALOG:
+                raise JsonlError(f"{unit_where}: unknown item {unit['item']!r}")
+            _check_iso_date(unit["issued_date"], f"{unit_where}: issued_date")
+            units.append({**unit, "item": item})
+        return {**row, "role": role, "equipment": units}
 
     def get(self, employee_id: str) -> dict[str, Any] | None:
         return self.employees.get(employee_id)

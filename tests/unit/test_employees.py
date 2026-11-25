@@ -1,6 +1,8 @@
+import os
+
 import pytest
 
-from militech_equipment.employees import get_employee_info
+from militech_equipment.employees import employee_repo, get_employee_info
 from militech_equipment.repository import EmployeeRepository
 
 
@@ -74,3 +76,16 @@ def test_defaults_to_today_and_seed_data(monkeypatch, data_dir):
 
     assert info["name"] == "Reyes Okafor"
     assert isinstance(info["tenure_months"], int)
+
+
+def test_default_repo_is_cached_until_the_file_changes(monkeypatch, data_dir):
+    monkeypatch.setenv("MILITECH_DATA_DIR", str(data_dir))
+    first = employee_repo()
+    assert employee_repo() is first  # no re-parse while the file is unchanged
+
+    path = data_dir / "employees.jsonl"
+    path.write_text(path.read_text().replace("Reyes Okafor", "Reyes Renamed"))
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+
+    assert employee_repo().get("E1001")["name"] == "Reyes Renamed"

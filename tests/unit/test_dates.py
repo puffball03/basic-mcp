@@ -6,7 +6,11 @@ from militech_equipment.dates import add_months, months_between, today
 
 
 def test_today_is_the_real_date():
-    assert today() == date.today()
+    before = date.today()
+    result = today()
+    after = date.today()
+
+    assert before <= result <= after  # bracketed, so a midnight rollover can't flake it
 
 
 @pytest.mark.parametrize(
