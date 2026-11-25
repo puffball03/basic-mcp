@@ -191,3 +191,81 @@ async def test_record_decision_guardrail_survives_protocol(server_params, data_d
     payload = _payload(result)
     assert (payload["error"], payload["status"]) == ("approval_not_permitted", "not_entitled")
     assert not (data_dir / "decisions.jsonl").exists()
+
+
+# --- the whole surface, as a client sees it (plan M7) ---
+
+# Requirements §7: every tool, its parameters in order, all plain strings.
+TOOL_PARAMETERS = {
+    "get_employee_info": ["employee_id"],
+    "get_policy_limits": ["role"],
+    "check_request_eligibility": ["employee_id", "item"],
+    "flag_for_human_review": ["employee_id", "request", "reason", "reason_code"],
+    "record_decision": ["employee_id", "item", "decision", "request_type", "reason"],
+}
+
+
+async def test_exactly_the_five_tools_with_their_schemas(server_params):
+    async with Client(server_params) as client:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    assert sorted(tools) == sorted(TOOL_PARAMETERS)
+    for name, parameters in TOOL_PARAMETERS.items():
+        schema = tools[name].input_schema
+        assert schema["required"] == parameters, name
+        assert list(schema["properties"]) == parameters, name
+        assert all(prop["type"] == "string" for prop in schema["properties"].values()), name
+        assert tools[name].description, name
+
+
+async def test_check_request_eligibility_input_error_survives_protocol(server_params):
+    async with Client(server_params) as client:
+        result = await client.call_tool(
+            "check_request_eligibility", {"employee_id": "E1001", "item": "   "}
+        )
+
+    assert _payload(result)["error"] == "invalid_item"
+
+
+async def test_missing_argument_is_a_tool_error_not_a_crash(server_params):
+    async with Client(server_params) as client:
+        broken = await client.call_tool("get_employee_info", {})
+        after = await client.call_tool("get_employee_info", {"employee_id": "E1001"})
+
+    assert broken.is_error is True  # schema validation, reported to the caller
+    assert _payload(after)["name"] == "Reyes Okafor"  # the session survives
+
+
+# --- runtime records outlive the server process ---
+
+
+async def test_decisions_persist_across_server_restarts(server_params):
+    async with Client(server_params) as client:
+        await client.call_tool(
+            "record_decision",
+            {"employee_id": "E1001", "item": "holo_display", "decision": "approve",
+             "request_type": "additional", "reason": "Second display for firmware work"},
+        )  # fmt: skip
+
+    async with Client(server_params) as client:  # a fresh server process, same data dir
+        result = await client.call_tool(
+            "check_request_eligibility", {"employee_id": "E1001", "item": "holo_display"}
+        )
+
+    eligibility = _payload(result)
+    assert eligibility["held"] == 2  # the approval from the first process counts
+    assert eligibility["request_type_assumed"] == "replacement"
+
+
+async def test_ticket_numbers_continue_across_server_restarts(server_params):
+    args = {"employee_id": "E1004", "request": "A combat drone", "reason": "Not in catalog",
+            "reason_code": "OFF_CATALOG"}  # fmt: skip
+    async with Client(server_params) as client:
+        first = _payload(await client.call_tool("flag_for_human_review", args))["ticket_id"]
+    async with Client(server_params) as client:
+        second = _payload(await client.call_tool("flag_for_human_review", args))["ticket_id"]
+
+    if first[:12] == second[:12]:  # same UTC day (the clock isn't pinned over stdio)
+        assert (first[-4:], second[-4:]) == ("0001", "0002")
+    else:
+        assert second.endswith("-0001")
