@@ -112,6 +112,12 @@ The AI's approve and deny decisions are **final** and recorded. Deny reason code
 | `THIRD_PARTY_REQUEST` | Request is on behalf of someone else |
 | `DATA_CONFLICT` | Records are inconsistent: unknown role, future `issued_date`, or held count above the cap |
 
+Before choosing any escalation code, the agent checks that the employee exists, with
+`get_employee_info` or `check_request_eligibility`. The eligibility check verifies the employee
+before the catalog (§4.2), so an `off_catalog` result already shows the employee is on file. An
+employee who isn't on file is always `EMPLOYEE_NOT_FOUND`, whatever else is wrong with the
+request. The guardrail (§8) enforces this.
+
 ## 7. Tools (MCP server)
 
 Every tool returns a JSON object. Expected failures come back as
@@ -139,7 +145,7 @@ currently returns `eligible: true`. This guardrail is enforced on the server.
 - **Guardrail (deterministic):** checks the final decision against the observations:
   - approve requires a successful `record_decision(approve)`
   - deny requires `record_decision(deny)` and a deny reason code
-  - escalate requires a `ticket_id`
+  - escalate requires a `ticket_id`, and a lookup showing whether the employee exists (§6)
   - the draft must quote the `ticket_id` or `decision_id`
 - **Reflection:** a separate reviewer LLM call checks two things:
   - does the draft accurately reflect the tool output?

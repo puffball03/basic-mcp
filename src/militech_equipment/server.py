@@ -68,6 +68,9 @@ def check_request_eligibility(employee_id: str, item: str) -> dict[str, Any]:
     description=(
         "Escalate a request to a human reviewer instead of deciding it. Opens a ticket and "
         "appends it to escalations.jsonl.\n\n"
+        "Check the employee first (get_employee_info or check_request_eligibility): an "
+        "employee who isn't on file is EMPLOYEE_NOT_FOUND, whatever else is wrong. An "
+        "off_catalog eligibility result already shows the employee exists.\n\n"
         "employee_id: Militech employee ID in the form E#### (e.g. E1004); it need not be "
         "on file.\n"
         "request: the employee's request, as they stated it.\n"

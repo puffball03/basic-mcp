@@ -76,6 +76,51 @@ def _check_replacement_below_cap(
     return None
 
 
+def _employee_status(entry: dict[str, Any]) -> str | None:
+    """'found' / 'not_found' if this lookup settles whether the employee exists, else None."""
+    observation = entry.get("observation") or {}
+    if entry["action"] == "get_employee_info":
+        if observation.get("error") == "employee_not_found":
+            return "not_found"
+        return None if "error" in observation else "found"
+    if entry["action"] == "check_request_eligibility":
+        if observation.get("status") == "employee_not_found":
+            return "not_found"
+        # check_request_eligibility verifies the employee before the catalog, so any other
+        # status (off_catalog included) means the employee exists.
+        return "found" if observation.get("status") else None
+    return None
+
+
+def _check_employee_verified(
+    employee_id: Any, code: str | None, trace: list[dict[str, Any]]
+) -> Violation | None:
+    """An escalation must rest on a lookup of the employee, and its code must agree with it."""
+    wanted = (employee_id or "").strip().upper() if isinstance(employee_id, str) else ""
+    statuses = [
+        status for e in trace
+        if (e["args"].get("employee_id") or "").strip().upper() == wanted
+        and (status := _employee_status(e)) is not None
+    ]  # fmt: skip
+    if not statuses:
+        return Violation(
+            "employee_not_verified",
+            f"Check the employee first: call get_employee_info or check_request_eligibility for "
+            f"{wanted or 'the employee'} before escalating, so the reason code is right.",
+        )
+    if statuses[-1] == "not_found" and code != "EMPLOYEE_NOT_FOUND":
+        return Violation(
+            "employee_status_mismatch",
+            f"{wanted} is not on file: escalate it as EMPLOYEE_NOT_FOUND, not {code}.",
+        )
+    if statuses[-1] == "found" and code == "EMPLOYEE_NOT_FOUND":
+        return Violation(
+            "employee_status_mismatch",
+            f"{wanted} is on file, so EMPLOYEE_NOT_FOUND doesn't apply.",
+        )
+    return None
+
+
 def validate(
     submission: dict[str, Any], trace: list[dict[str, Any]], *, as_of: date | None = None
 ) -> list[Violation]:
@@ -148,6 +193,9 @@ def validate(
                 violations.append(Violation(
                     "draft_missing_id", f"The draft must quote the ticket_id {ticket_id}."
                 ))  # fmt: skip
+            problem = _check_employee_verified(ticket["args"].get("employee_id"), code, trace)
+            if problem is not None:
+                violations.append(problem)
         if records:
             violations.append(Violation(
                 "conflicting_records",
