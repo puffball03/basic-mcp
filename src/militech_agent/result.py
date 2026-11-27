@@ -21,6 +21,7 @@ class AgentResult:
     ticket_id: str | None = None
     decision_id: str | None = None
     reflection: list[dict[str, Any]] = field(default_factory=list)
+    violations: list[dict[str, str]] = field(default_factory=list)  # guardrail, if it gave up
     trace: list[dict[str, Any]] = field(default_factory=list)
     steps: int = 0
     stopped_by_cap: bool = False
@@ -55,6 +56,15 @@ def trace_to_markdown(result: AgentResult) -> str:
             "```",
             "",
         ]
+    if result.violations:
+        lines += [
+            "## Guardrail",
+            "",
+            "The decision failed the guardrail twice and was escalated:",
+            "",
+        ]
+        lines += [f"- `{v['code']}`: {v['message']}" for v in result.violations]
+        lines.append("")
     lines += [
         "## Decision",
         "",

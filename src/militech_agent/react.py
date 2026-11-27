@@ -4,16 +4,23 @@ Each step is one model reply. A reply's tool call is run only if a Thought (text
 the first miss is answered with a request to add one, a second miss in a row runs the call
 with thought "(none)". The loop ends when the model calls the local submit_decision tool with
 valid input, or after MAX_STEPS replies, when the agent escalates with UNCLEAR_REQUEST itself.
+
+A valid submission must also pass the guardrail (M10). A violation gets one correction; a
+second ends in an UNCLEAR_REQUEST escalation. Each request gets one outcome: once a decision
+is recorded or a ticket opened, further record_decision / flag_for_human_review calls are not
+run, so the audit logs can't contradict each other.
 """
 
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from militech_agent.guardrail import Violation, validate
 from militech_agent.llm import LLMClient
 from militech_agent.prompts import DENY_CODES, SYSTEM_PROMPT
 from militech_agent.result import AgentResult, write_trace
 from militech_agent.single_call import SKIPPED, ToolSession, format_request, tool_result
+from militech_equipment import dates
 from militech_equipment.escalations import REASON_CODES
 
 MAX_STEPS = 8
@@ -58,6 +65,26 @@ MISSING_THOUGHT: dict[str, str] = {
     "make the call again.",
 }
 CONTINUE = "Continue: call one tool, or finish by calling submit_decision."
+OUTCOME_TOOLS = ("record_decision", "flag_for_human_review")
+
+
+def _violation_feedback(violations: list[Violation]) -> dict[str, Any]:
+    return {
+        "error": "guardrail_violation",
+        "violations": [v.to_dict() for v in violations],
+        "message": "The decision doesn't match the tool results. Fix these, then call "
+        "submit_decision again.",
+    }
+
+
+def _already_recorded(outcome: dict[str, str]) -> dict[str, Any]:
+    ((key, value),) = outcome.items()
+    return {
+        "error": "outcome_already_recorded",
+        key: value,
+        "message": f"This request already has an outcome ({value}). Don't record another; "
+        f"call submit_decision now, quoting {value}.",
+    }
 
 
 def _thought_of(blocks: list[Any]) -> str | None:
@@ -107,6 +134,8 @@ async def run_agent(
     trace: list[dict[str, Any]] = []
     ids: dict[str, str | None] = {"ticket_id": None, "decision_id": None}
     reprompted = False
+    corrected = False  # the guardrail gives one correction
+    outcome: dict[str, str] = {}  # the decision_id or ticket_id once one is recorded
 
     def record(step: int, thought: str, action: str, args: dict, observation: dict) -> None:
         entry = {"step": step, "thought": thought, "action": action, "args": args,
@@ -128,6 +157,33 @@ async def run_agent(
             write_trace(result, traces_dir)
         return result
 
+    async def escalate_unclear(step: int, thought: str, reason: str, **extra: Any) -> AgentResult:
+        """The agent's own UNCLEAR_REQUEST escalation (step cap, or a repeated violation)."""
+        if ids["decision_id"]:
+            reason += (
+                f" This conflicts with recorded decision {ids['decision_id']}; a reviewer must "
+                "resolve it."
+            )
+        if ids["ticket_id"] is None:  # never open a second ticket for one request
+            flag_args = {"employee_id": request["employee_id"], "request": request["message"],
+                         "reason": reason, "reason_code": "UNCLEAR_REQUEST"}  # fmt: skip
+            observation = await session.call_tool("flag_for_human_review", flag_args)
+            ids["ticket_id"] = observation.get("ticket_id")
+            record(step, thought, "flag_for_human_review", flag_args, observation)
+        ticket = ids["ticket_id"] or "pending"
+        return finish(
+            decision="escalate",
+            reason_code="UNCLEAR_REQUEST",
+            item=None,
+            request_type=None,
+            response_text=(
+                f"Your request {request['request_id']} needs a closer look, so it has been "
+                f"passed to a Militech Asset Control reviewer (ticket {ticket}). You'll hear "
+                "back once a human has reviewed it."
+            ),
+            **extra,
+        )
+
     for step in range(1, max_steps + 1):
         response = llm.create(messages=messages, tools=tools, system=SYSTEM_PROMPT)
         messages.append({"role": "assistant", "content": response.content})
@@ -147,7 +203,23 @@ async def run_agent(
             thought = thought or "(none)"
             if call.name == SUBMIT_DECISION_TOOL["name"]:
                 problems = validate_submission(args)
-                if not problems:
+                violations = [] if problems else validate(args, trace, as_of=dates.today())
+                if problems:
+                    observation = {"error": "invalid_submission", "message": "; ".join(problems)}
+                elif violations and corrected:
+                    record(step, thought, call.name, args, _violation_feedback(violations))
+                    codes = ", ".join(v.code for v in violations)
+                    return await escalate_unclear(
+                        step,
+                        "(guardrail violated twice: escalating)",
+                        f"The agent's decision failed the guardrail twice ({codes}).",
+                        violations=[v.to_dict() for v in violations],
+                        steps=step,
+                    )
+                elif violations:
+                    corrected = True
+                    observation = _violation_feedback(violations)
+                else:
                     record(step, thought, call.name, args, {"status": "submitted"})
                     return finish(
                         decision=args["decision"],
@@ -157,12 +229,17 @@ async def run_agent(
                         response_text=args["draft_response"].strip(),
                         steps=step,
                     )
-                observation = {"error": "invalid_submission", "message": "; ".join(problems)}
+            elif call.name in OUTCOME_TOOLS and outcome:
+                # One outcome per request: a second decision or ticket would contradict the
+                # first in the audit logs, so it is not run.
+                observation = _already_recorded(outcome)
             else:
                 observation = await session.call_tool(call.name, args)
                 for key in ids:
                     if key in observation:
                         ids[key] = observation[key]
+                        if call.name in OUTCOME_TOOLS:
+                            outcome = {key: observation[key]}
 
         record(step, thought or "(none)", call.name, args, observation)
         results = [tool_result(call.id, observation)]
@@ -171,27 +248,10 @@ async def run_agent(
         messages.append({"role": "user", "content": results})
 
     # Step cap: escalate rather than guess.
-    flag_args = {
-        "employee_id": request["employee_id"],
-        "request": request["message"],
-        "reason": f"The agent reached its {max_steps}-step limit without a decision.",
-        "reason_code": "UNCLEAR_REQUEST",
-    }
-    observation = await session.call_tool("flag_for_human_review", flag_args)
-    ids["ticket_id"] = observation.get("ticket_id")
-    record(max_steps + 1, f"(step cap of {max_steps} reached: escalating)",
-           "flag_for_human_review", flag_args, observation)  # fmt: skip
-    ticket = ids["ticket_id"] or "pending"
-    return finish(
-        decision="escalate",
-        reason_code="UNCLEAR_REQUEST",
-        item=None,
-        request_type=None,
-        response_text=(
-            f"Your request {request['request_id']} needs a closer look, so it has been passed "
-            f"to a Militech Asset Control reviewer (ticket {ticket}). You'll hear back once a "
-            "human has reviewed it."
-        ),
+    return await escalate_unclear(
+        max_steps + 1,
+        f"(step cap of {max_steps} reached: escalating)",
+        f"The agent reached its {max_steps}-step limit without a decision.",
         steps=max_steps,
         stopped_by_cap=True,
     )
