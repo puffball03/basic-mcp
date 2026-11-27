@@ -23,8 +23,14 @@ REQUEST_TYPES = ("additional", "replacement")
 SUBMIT_DECISION_TOOL: dict[str, Any] = {
     "name": "submit_decision",
     "description": (
-        "Finish the request. Call exactly once, after record_decision (approve/deny) or "
-        "flag_for_human_review (escalate) has succeeded."
+        "Finish the request. Call exactly once, after record_decision (approve or deny) or "
+        "flag_for_human_review (escalate) has succeeded.\n"
+        "reason_code: null for approve; for deny, the code used in record_decision "
+        f"({', '.join(DENY_CODES)}); for escalate, the code used in flag_for_human_review "
+        f"({', '.join(REASON_CODES)}).\n"
+        "request_type: additional or replacement (may be null when escalating).\n"
+        "draft_response: a short, professional reply to the employee with light Militech "
+        "branding that quotes the decision_id or ticket_id you received."
     ),
     "input_schema": {
         "type": "object",
