@@ -6,7 +6,11 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
-from militech_equipment.escalations import REASON_CODES, flag_for_human_review
+from militech_equipment.escalations import (
+    REASON_CODE_MEANINGS,
+    REASON_CODES,
+    flag_for_human_review,
+)
 
 NOW = datetime(2026, 11, 23, 14, 5, 0, tzinfo=UTC)
 
@@ -42,6 +46,12 @@ def test_reason_codes_match_requirements():
         "OFF_CATALOG", "EXCEPTION_CLAIMED", "UNCLEAR_REQUEST",
         "EMPLOYEE_NOT_FOUND", "THIRD_PARTY_REQUEST", "DATA_CONFLICT",
     )  # fmt: skip
+
+
+def test_every_reason_code_has_a_meaning():
+    # The escalation tool's description is built from these, for the model to read.
+    assert set(REASON_CODE_MEANINGS) == set(REASON_CODES)
+    assert all(meaning.strip() for meaning in REASON_CODE_MEANINGS.values())
 
 
 # --- the happy path: one ticket, one line ---

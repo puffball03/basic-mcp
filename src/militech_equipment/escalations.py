@@ -25,6 +25,18 @@ REASON_CODES: tuple[str, ...] = (
 
 ESCALATIONS_FILE = "escalations.jsonl"
 
+# When each code applies, in the order to check them; the escalation tool's description is
+# built from this, so the rules reach every MCP client with the tool listing.
+REASON_CODE_MEANINGS: dict[str, str] = {
+    "EMPLOYEE_NOT_FOUND": "the employee_id is not on file.",
+    "THIRD_PARTY_REQUEST": "the request is on behalf of someone else.",
+    "OFF_CATALOG": "the item is not one of the catalog items.",
+    "UNCLEAR_REQUEST": "you can't tell which item is wanted, or several are bundled together.",
+    "DATA_CONFLICT": "eligibility reports data_conflict (the records are inconsistent).",
+    "EXCEPTION_CLAIMED": "policy says no, but the unit is damaged, lost or stolen, or there is "
+    "a medical or accessibility need.",
+}
+
 
 def flag_for_human_review(
     employee_id: Any,

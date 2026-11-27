@@ -72,8 +72,9 @@ def check_request_eligibility(employee_id: str, item: str) -> dict[str, Any]:
         "on file.\n"
         "request: the employee's request, as they stated it.\n"
         "reason: why this needs a human, in a sentence.\n"
-        f"reason_code: one of {', '.join(escalations.REASON_CODES)}.\n"
-        'Returns {"ticket_id": "ESC-YYYYMMDD-NNNN", "status": "open", "created_at"}, or '
+        "reason_code: the first that applies:\n"
+        + "".join(f"- {code}: {when}\n" for code, when in escalations.REASON_CODE_MEANINGS.items())
+        + 'Returns {"ticket_id": "ESC-YYYYMMDD-NNNN", "status": "open", "created_at"}, or '
         '{"error": "invalid_employee_id" | "missing_field" | "invalid_reason_code", ...} '
         "with nothing written."
     )
@@ -88,6 +89,16 @@ def flag_for_human_review(
     description=(
         "Record a final approve or deny decision and append it to decisions.jsonl. Use it only "
         "for clear-cut requests; escalate anything ambiguous with flag_for_human_review.\n\n"
+        "Approve when check_request_eligibility says within_policy. Deny, quoting one code in "
+        "reason, when the answer is clearly no:\n"
+        "- NOT_ENTITLED: the role is never entitled to the item.\n"
+        "- REFRESH_NOT_DUE: a replacement before the oldest unit is due (give the date).\n"
+        "- QUANTITY_CAP_REACHED: the employee asks for another unit while at the cap, even if "
+        "a replacement would be within policy.\n"
+        "An explicit replacement below the cap is approved only if the oldest unit has reached "
+        "refresh_months. Saying the unit is slow or wanting a newer model is not an exception: "
+        "deny. If the unit is damaged, lost, stolen, or there is a medical need, don't deny: "
+        "use flag_for_human_review.\n\n"
         "employee_id: Militech employee ID in the form E#### (e.g. E1004); must be on file.\n"
         f"item: one of {', '.join(CATALOG)}.\n"
         f"decision: {' or '.join(decisions.DECISIONS)}.\n"
