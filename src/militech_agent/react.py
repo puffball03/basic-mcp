@@ -9,6 +9,9 @@ A valid submission must also pass the guardrail (M10). A violation gets one corr
 second ends in an UNCLEAR_REQUEST escalation. Each request gets one outcome: once a decision
 is recorded or a ticket opened, further record_decision / flag_for_human_review calls are not
 run, so the audit logs can't contradict each other.
+
+With a `reviewer`, the submitted draft is reflected on (M11) before it is returned. Templated
+replies from the agent's own escalations are not reviewed: no model wrote them.
 """
 
 from collections.abc import Callable
@@ -18,6 +21,7 @@ from typing import Any
 from militech_agent.guardrail import Violation, validate
 from militech_agent.llm import LLMClient
 from militech_agent.prompts import DENY_CODES, SYSTEM_PROMPT
+from militech_agent.reflection import reflect
 from militech_agent.result import AgentResult, write_trace
 from militech_agent.single_call import SKIPPED, ToolSession, format_request, tool_result
 from militech_equipment import dates
@@ -127,6 +131,7 @@ async def run_agent(
     max_steps: int = MAX_STEPS,
     traces_dir: Path | None = None,
     on_step: Callable[[dict[str, Any]], None] | None = None,
+    reviewer: LLMClient | None = None,
 ) -> AgentResult:
     """Investigate `request` ({request_id, employee_id, message}) and reach a decision."""
     tools = [*session.tools, SUBMIT_DECISION_TOOL]
@@ -221,14 +226,18 @@ async def run_agent(
                     observation = _violation_feedback(violations)
                 else:
                     record(step, thought, call.name, args, {"status": "submitted"})
-                    return finish(
-                        decision=args["decision"],
-                        reason_code=args.get("reason_code") or None,
-                        item=args.get("item"),
-                        request_type=args.get("request_type") or None,
-                        response_text=args["draft_response"].strip(),
-                        steps=step,
-                    )
+                    decided = {
+                        "decision": args["decision"],
+                        "reason_code": args.get("reason_code") or None,
+                        "item": args.get("item"),
+                        "request_type": args.get("request_type") or None,
+                    }
+                    draft, rounds = args["draft_response"].strip(), []
+                    if reviewer is not None:  # reflection (M11): review the model's draft
+                        draft, rounds = reflect(
+                            draft, {**decided, **ids}, trace, reviewer=reviewer, writer=llm
+                        )
+                    return finish(**decided, response_text=draft, reflection=rounds, steps=step)
             elif call.name in OUTCOME_TOOLS and outcome:
                 # One outcome per request: a second decision or ticket would contradict the
                 # first in the audit logs, so it is not run.
