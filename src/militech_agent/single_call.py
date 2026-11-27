@@ -104,13 +104,13 @@ async def run_single_tool_call(
     }
 
 
-def _find_api_error(exc: BaseException) -> anthropic.APIError | None:
+def find_api_error(exc: BaseException) -> anthropic.APIError | None:
     """The Anthropic API error inside `exc`, unwrapping the MCP client's exception groups."""
     if isinstance(exc, anthropic.APIError):
         return exc
     if isinstance(exc, BaseExceptionGroup):
         for inner in exc.exceptions:
-            if (found := _find_api_error(inner)) is not None:
+            if (found := find_api_error(inner)) is not None:
                 return found
     return None
 
@@ -132,7 +132,7 @@ def main(env_file: str | Path = ".env") -> int:
     try:
         result = asyncio.run(_run())
     except (anthropic.APIError, BaseExceptionGroup) as exc:
-        api_error = _find_api_error(exc)
+        api_error = find_api_error(exc)
         if api_error is None:
             raise  # not an API failure: a bug, so keep the traceback
         request_id = getattr(api_error, "request_id", None)
