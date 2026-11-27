@@ -10,6 +10,7 @@ from anthropic.types import Message, TextBlock, ToolUseBlock
 
 from militech_agent.llm import (
     DEFAULT_MODEL,
+    ONE_TOOL_AT_A_TIME,
     FoundryLLM,
     LLMClient,
     MissingCredentialsError,
@@ -159,5 +160,12 @@ def test_foundry_llm_create_sends_model_system_messages_and_tools(no_foundry_env
     assert llm.create(messages=messages, tools=tools, system="sys") is canned
     assert fake.messages.calls == [
         {"model": "claude-sonnet-5-5", "max_tokens": 4096, "system": "sys",
-         "messages": messages, "tools": tools}
+         "messages": messages, "tools": tools, "tool_choice": ONE_TOOL_AT_A_TIME}
     ]  # fmt: skip
+
+
+def test_foundry_llm_asks_for_one_tool_call_at_a_time():
+    # Side-effecting tools (record_decision, flag_for_human_review) must run in order, one
+    # Thought -> Action -> Observation per step. "auto" keeps the model free to answer
+    # without a tool; forcing "any"/"tool" is rejected by claude-sonnet-5-5.
+    assert ONE_TOOL_AT_A_TIME == {"type": "auto", "disable_parallel_tool_use": True}

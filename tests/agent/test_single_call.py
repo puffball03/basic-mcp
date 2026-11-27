@@ -6,6 +6,10 @@ twin of the M1 hello client: proof the plumbing works before the ReAct loop arri
 
 import json
 
+import anthropic
+import httpx2
+
+from militech_agent import single_call
 from militech_agent.llm import ScriptedLLM, reply, text, tool_use
 from militech_agent.mcp_session import McpSession
 from militech_agent.single_call import HARDCODED_REQUEST, SYSTEM_PROMPT, run_single_tool_call
@@ -106,3 +110,56 @@ async def test_no_tool_call_is_reported_not_raised(data_dir):
     assert result["observation"] is None
     assert result["answer"] == "I can answer without tools."
     assert len(llm.calls) == 1
+
+
+async def test_every_tool_call_in_the_reply_gets_a_result(data_dir):
+    # Fallback: FoundryLLM asks for one call at a time, but if a reply ever holds several
+    # (seen live against Foundry before that setting), the API still needs a tool_result for
+    # every tool_use in the next message. Run only the first; answer the rest as skipped so
+    # nothing unexpected is written and the model is told to ask again one at a time.
+    lookup = tool_use("get_employee_info", {"employee_id": "E1001"})
+    limits = tool_use("get_policy_limits", {"role": "cyberware_tech"})
+    llm = ScriptedLLM([
+        reply(text("Thought: I need the record and the policy."), lookup, limits),
+        reply(text("Reyes Okafor is a cyberware_tech.")),
+    ])  # fmt: skip
+    async with McpSession.stdio(data_dir=data_dir) as real:
+        session = CountingSession(real)
+        result = await run_single_tool_call(llm, session, HARDCODED_REQUEST)
+
+    assert session.calls == [("get_employee_info", {"employee_id": "E1001"})]  # still one call
+    assert result["tool"] == "get_employee_info"
+
+    executed, skipped = llm.calls[1]["messages"][2]["content"]
+    assert (executed["tool_use_id"], executed["is_error"]) == (lookup.id, False)
+    assert skipped["type"] == "tool_result"
+    assert (skipped["tool_use_id"], skipped["is_error"]) == (limits.id, True)
+    skip_note = json.loads(skipped["content"])
+    assert skip_note["error"] == "tool_call_skipped"
+    assert "one tool call at a time" in skip_note["message"]
+
+
+# --- the manual entry point fails cleanly ---
+
+
+def test_main_reports_api_errors_in_one_line(monkeypatch, capsys, tmp_path, data_dir):
+    # A live run used to end in a long exception-group traceback. An API failure should print
+    # one line with the error (and request id when there is one) and exit non-zero.
+    monkeypatch.setenv("AZURE_FOUNDRY_ENDPOINT", "https://example.services.ai.azure.com/anthropic")
+    monkeypatch.setenv("AZURE_FOUNDRY_API_KEY", "test-key")
+    monkeypatch.setenv("MILITECH_DATA_DIR", str(data_dir))
+
+    async def fail(*args, **kwargs):
+        request = httpx2.Request("POST", "https://example.services.ai.azure.com/anthropic")
+        raise anthropic.APIConnectionError(message="Connection error.", request=request)
+
+    monkeypatch.setattr(single_call, "run_single_tool_call", fail)
+
+    exit_code = single_call.main(env_file=tmp_path / "missing.env")
+
+    err = capsys.readouterr().err
+    assert exit_code == 1
+    assert err.startswith("error: Foundry request failed")
+    assert "Connection error." in err
+    assert "Traceback" not in err
+    assert "test-key" not in err
