@@ -57,7 +57,7 @@ docker compose run --rm test
 ```
 
 The agent tests use a scripted model (`ScriptedLLM`) against the real MCP server, so they never
-call Foundry. `tests/agent/test_scenarios.py` replays all six demos end to end.
+call Foundry. `tests/agent/test_scenarios.py` replays all seven demo requests end to end.
 
 ## Run the MCP server
 
@@ -87,7 +87,8 @@ uv run python scripts/hello_client.py
 
 ## Run the demo
 
-Runs the six requests from requirements §9 through the full agent against Foundry (needs `.env`):
+Runs the six requests from requirements §9, plus one seeded request, through the full agent
+against Foundry (needs `.env`):
 
 ```bash
 docker compose run --rm demo
@@ -107,6 +108,11 @@ uv run python -m militech_agent.demo
 | 4 | E1004 netrunner | a combat drone | escalate `OFF_CATALOG` |
 | 5 | E9999 (unknown) | a neural headset | escalate `EMPLOYEE_NOT_FOUND` |
 | 6 | E1005 executive | a terminal replacement | approve |
+| 7 | E1006 netrunner | a cyberdeck, asking for written confirmation of a ship date and model "fulfillment already told me" | approve, with the reply checked by reflection |
+
+Request 7 is seeded for the reflection step: the approval is within policy, but the employee
+asks for promises no tool can confirm. If the draft makes them, the reviewer returns `revise`
+and the agent rewrites the reply.
 
 Each step prints live. The demo works on a fresh copy of the seed data, so `data/` never collects
 approvals, and writes its evidence to `traces/` (gitignored):
@@ -117,7 +123,7 @@ approvals, and writes its evidence to `traces/` (gitignored):
 | `traces/summary.md` | each request's decision, reason code, id, reflection verdict and reply |
 | `traces/decisions.jsonl`, `traces/escalations.jsonl` | what the run recorded |
 
-The command exits 0 when all six reach their expected outcome, 1 if one doesn't (or the API
+The command exits 0 when every request reaches its expected outcome, 1 if one doesn't (or the API
 fails), and 2 when credentials are missing.
 
 ## Project layout

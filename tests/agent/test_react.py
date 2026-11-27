@@ -69,10 +69,15 @@ def submit_quoting(decision="approve", reason_code=None, item="holo_display",
 
 
 def escalate(code="UNCLEAR_REQUEST", employee_id="E1001", item="holo_display"):
-    """Two replies: flag_for_human_review, then submit quoting the ticket."""
+    """Three replies: check the employee, flag_for_human_review, submit quoting the ticket."""
     flag_args = {"employee_id": employee_id, "request": "test request",
                  "reason": "test escalation", "reason_code": code}  # fmt: skip
+    check = {"employee_id": employee_id, "item": item}
     return [
+        reply(
+            thought("Check the employee and item first."),
+            tool_use("check_request_eligibility", check),
+        ),
         reply(thought(f"Escalate with {code}."), tool_use("flag_for_human_review", flag_args)),
         submit_quoting("escalate", code, item, None, "Passed to a human reviewer"),
     ]
@@ -477,6 +482,8 @@ async def test_ticket_after_a_recorded_decision_is_blocked(data_dir):
 
 async def test_decision_after_a_ticket_is_blocked(data_dir):
     llm = ScriptedLLM([
+        reply(thought("Check the employee."),
+              tool_use("get_employee_info", {"employee_id": "E1001"})),
         reply(thought("Escalate."), tool_use("flag_for_human_review", FLAG)),
         reply(thought("Approve too."), tool_use("record_decision", RECORD_APPROVE)),
         submit_quoting("escalate", "UNCLEAR_REQUEST", "holo_display", None, "Passed on"),
@@ -484,8 +491,8 @@ async def test_decision_after_a_ticket_is_blocked(data_dir):
 
     result, session = await run(llm, data_dir)
 
-    assert [name for name, _ in session.calls] == ["flag_for_human_review"]
-    assert result.trace[1]["observation"]["ticket_id"] == result.ticket_id
+    assert [name for name, _ in session.calls] == ["get_employee_info", "flag_for_human_review"]
+    assert result.trace[2]["observation"]["ticket_id"] == result.ticket_id
     assert not (data_dir / "decisions.jsonl").exists()
     assert result.decision == "escalate"
 
@@ -559,3 +566,38 @@ async def test_step_cap_ticket_names_the_recorded_decision(data_dir):
     flag_args = session.calls[-1][1]
     assert result.stopped_by_cap is True
     assert result.decision_id in flag_args["reason"]
+
+
+# --- an escalation must rest on a check of the employee (grader note on REQ-0004) ---
+
+
+async def test_escalating_before_checking_the_employee_gets_a_correction(data_dir):
+    # The live REQ-0004 pattern: flag OFF_CATALOG straight away, without checking E1004.
+    drone = {"request_id": "REQ-0004", "employee_id": "E1004",
+             "message": "Requisitioning a combat drone for a run next week."}  # fmt: skip
+    flag = {"employee_id": "E1004", "request": drone["message"],
+            "reason": "Not a catalog item", "reason_code": "OFF_CATALOG"}  # fmt: skip
+
+    def resubmit_quoting_ticket(messages):
+        # The ticket was opened at step 1; find its id in that tool_result.
+        ticket = json.loads(messages[2]["content"][0]["content"])["ticket_id"]
+        return reply(thought("E1004 exists (off_catalog): resubmit."),
+                     submit("escalate", "OFF_CATALOG", "combat drone", None,
+                            f"Escalated to a reviewer ({ticket})."))  # fmt: skip
+
+    llm = ScriptedLLM([
+        reply(thought("Off catalog: escalate."), tool_use("flag_for_human_review", flag)),
+        submit_quoting("escalate", "OFF_CATALOG", "combat drone", None, "Escalated"),
+        reply(thought("Verify the employee as the guardrail asks."),
+              tool_use("check_request_eligibility", {"employee_id": "E1004",
+                                                     "item": "combat drone"})),
+        resubmit_quoting_ticket,
+    ])  # fmt: skip
+
+    result, _ = await run(llm, data_dir, request=drone)
+
+    feedback = result.trace[1]["observation"]
+    assert feedback["error"] == "guardrail_violation"
+    assert [v["code"] for v in feedback["violations"]] == ["employee_not_verified"]
+    assert result.trace[2]["observation"]["status"] == "off_catalog"
+    assert (result.decision, result.reason_code) == ("escalate", "OFF_CATALOG")

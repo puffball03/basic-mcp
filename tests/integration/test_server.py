@@ -306,3 +306,10 @@ async def test_record_decision_explains_when_to_approve_or_deny(server_params):
     assert "flag_for_human_review" in description  # exception reasons go there instead
     assert "another unit" in description and "at the cap" in description
     assert "below the cap" in description
+
+
+async def test_flag_for_human_review_says_to_check_the_employee_first(server_params):
+    description = (await _descriptions(server_params))["flag_for_human_review"]
+
+    assert "Check the employee first" in description
+    assert "get_employee_info" in description and "check_request_eligibility" in description
