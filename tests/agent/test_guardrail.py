@@ -45,6 +45,20 @@ def flagged(reason_code="EXCEPTION_CLAIMED", ticket_id=ESC):
     )  # fmt: skip
 
 
+def looked_up(employee_id="E1002", found=True, via="get_employee_info"):
+    """A lookup that settles whether the employee exists (found, or employee_not_found)."""
+    if via == "get_employee_info":
+        observation = (
+            {"employee_id": employee_id, "name": "N", "role": "corpo_staff", "equipment": []}
+            if found
+            else {"error": "employee_not_found", "employee_id": employee_id}
+        )
+        return entry("get_employee_info", {"employee_id": employee_id}, observation)
+    status = "off_catalog" if found else "employee_not_found"
+    return entry("check_request_eligibility", {"employee_id": employee_id, "item": "x"},
+                 {"eligible": False, "status": status, "employee_id": employee_id})  # fmt: skip
+
+
 def submission(decision, reason_code=None, item="holo_display", request_type="additional",
                draft=None):  # fmt: skip
     ids = {"approve": DEC, "deny": DEC, "escalate": ESC}
@@ -66,7 +80,7 @@ def codes(violations):
         (submission("approve"), [recorded("approve")]),
         (submission("deny", "NOT_ENTITLED", item="cyberdeck"), [recorded("deny", "cyberdeck")]),
         (submission("escalate", "EXCEPTION_CLAIMED", item="terminal", request_type=None),
-         [flagged()]),
+         [looked_up(), flagged()]),
         # A refused approval followed by a recorded deny is still a clean deny.
         (submission("deny", "NOT_ENTITLED", item="cyberdeck"),
          [refused(item="cyberdeck"), recorded("deny", "cyberdeck")]),
@@ -197,3 +211,66 @@ def test_replacement_at_the_cap_is_left_to_the_server():
     trace = [at_cap, recorded("approve", "terminal", "replacement")]
 
     assert validate(replacement("terminal"), trace, as_of=AS_OF) == []
+
+
+# --- an escalation must rest on a check of the employee (grader note on REQ-0004) ---
+# The employee is checked before any escalation code is chosen: get_employee_info, or
+# check_request_eligibility (which checks the employee before the catalog, so even an
+# off_catalog result proves the employee exists).
+
+
+def escalation(code="OFF_CATALOG", draft=f"Escalated: {ESC}."):
+    return submission("escalate", code, item="combat drone", request_type=None, draft=draft)
+
+
+def test_escalation_without_checking_the_employee_is_a_violation():
+    violations = validate(escalation(), [flagged("OFF_CATALOG")], as_of=AS_OF)
+
+    assert codes(violations) == ["employee_not_verified"]
+    assert "get_employee_info" in violations[0].message
+
+
+@pytest.mark.parametrize("via", ["get_employee_info", "check_request_eligibility"])
+def test_either_lookup_verifies_the_employee(via):
+    trace = [looked_up(via=via), flagged("OFF_CATALOG")]
+
+    assert validate(escalation(), trace, as_of=AS_OF) == []
+
+
+def test_a_lookup_of_someone_else_does_not_count():
+    trace = [looked_up("E1001"), flagged("OFF_CATALOG")]  # the ticket is for E1002
+
+    assert codes(validate(escalation(), trace, as_of=AS_OF)) == ["employee_not_verified"]
+
+
+def test_a_malformed_lookup_does_not_count():
+    bad = entry("get_employee_info", {"employee_id": "E1002"},
+                {"error": "invalid_employee_id", "employee_id": "E1002"})  # fmt: skip
+
+    assert codes(validate(escalation(), [bad, flagged("OFF_CATALOG")], as_of=AS_OF)) == [
+        "employee_not_verified"
+    ]
+
+
+@pytest.mark.parametrize("via", ["get_employee_info", "check_request_eligibility"])
+def test_unknown_employee_is_escalated_as_employee_not_found(via):
+    trace = [looked_up(found=False, via=via), flagged("EMPLOYEE_NOT_FOUND")]
+
+    assert validate(escalation("EMPLOYEE_NOT_FOUND"), trace, as_of=AS_OF) == []
+
+
+def test_unknown_employee_with_another_code_is_a_mismatch():
+    trace = [looked_up(found=False), flagged("OFF_CATALOG")]
+
+    violations = validate(escalation("OFF_CATALOG"), trace, as_of=AS_OF)
+
+    assert codes(violations) == ["employee_status_mismatch"]
+    assert "EMPLOYEE_NOT_FOUND" in violations[0].message
+
+
+def test_found_employee_cannot_be_escalated_as_not_found():
+    trace = [looked_up(found=True), flagged("EMPLOYEE_NOT_FOUND")]
+
+    violations = validate(escalation("EMPLOYEE_NOT_FOUND"), trace, as_of=AS_OF)
+
+    assert codes(violations) == ["employee_status_mismatch"]
