@@ -57,7 +57,7 @@ def _texts(blocks: list[Any]) -> str:
     return "\n".join(block.text for block in blocks if block.type == "text").strip()
 
 
-def _tool_result(tool_use_id: str, observation: dict[str, Any]) -> dict[str, Any]:
+def tool_result(tool_use_id: str, observation: dict[str, Any]) -> dict[str, Any]:
     return {
         "type": "tool_result",
         "tool_use_id": tool_use_id,
@@ -86,10 +86,10 @@ async def run_single_tool_call(
     call = first.content[calls[0]]
     thought = _texts(first.content[: calls[0]]) or None
     observation = await session.call_tool(call.name, dict(call.input))
-    results = [_tool_result(call.id, observation)]
+    results = [tool_result(call.id, observation)]
     # Fallback: FoundryLLM asks for one call per reply, but every tool_use must still get a
     # tool_result in the next message. Extra calls are answered as skipped, never executed.
-    results += [_tool_result(first.content[i].id, SKIPPED) for i in calls[1:]]
+    results += [tool_result(first.content[i].id, SKIPPED) for i in calls[1:]]
     messages += [
         {"role": "assistant", "content": first.content},
         {"role": "user", "content": results},

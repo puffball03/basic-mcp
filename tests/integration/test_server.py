@@ -269,3 +269,40 @@ async def test_ticket_numbers_continue_across_server_restarts(server_params):
         assert (first[-4:], second[-4:]) == ("0001", "0002")
     else:
         assert second.endswith("-0001")
+
+
+# --- each decision rule lives on the tool where it is applied (plan M9) ---
+# The agent's system prompt only says how to work; these descriptions carry the rules, so any
+# MCP client learns them from the tool listing.
+
+
+async def _descriptions(server_params) -> dict[str, str]:
+    async with Client(server_params) as client:
+        return {tool.name: tool.description for tool in (await client.list_tools()).tools}
+
+
+async def test_check_request_eligibility_explains_item_names_and_readings(server_params):
+    description = (await _descriptions(server_params))["check_request_eligibility"]
+
+    assert '"laptop"' in description  # map plain words to catalog items first
+    assert "additional" in description and "replacement" in description
+    assert "request_type_assumed" in description
+
+
+async def test_flag_for_human_review_explains_each_reason_code(server_params):
+    description = (await _descriptions(server_params))["flag_for_human_review"]
+
+    for trigger in ("damaged", "lost", "stolen", "medical", "on behalf of", "not on file",
+                    "not one of the catalog", "data_conflict"):  # fmt: skip
+        assert trigger in description, trigger
+
+
+async def test_record_decision_explains_when_to_approve_or_deny(server_params):
+    description = (await _descriptions(server_params))["record_decision"]
+
+    for code in ("NOT_ENTITLED", "REFRESH_NOT_DUE", "QUANTITY_CAP_REACHED"):
+        assert code in description, code
+    assert "slow" in description and "not an exception" in description
+    assert "flag_for_human_review" in description  # exception reasons go there instead
+    assert "another unit" in description and "at the cap" in description
+    assert "below the cap" in description
