@@ -169,3 +169,20 @@ def test_foundry_llm_asks_for_one_tool_call_at_a_time():
     # Thought -> Action -> Observation per step. "auto" keeps the model free to answer
     # without a tool; forcing "any"/"tool" is rejected by claude-sonnet-5-5.
     assert ONE_TOOL_AT_A_TIME == {"type": "auto", "disable_parallel_tool_use": True}
+
+
+def test_scripted_llm_accepts_a_reply_function():
+    # A scripted reply can depend on the conversation, e.g. to quote the decision_id the
+    # server just returned, the way the real model does.
+    def quote_last(messages):
+        return reply(text(f"Got {len(messages)} messages."))
+
+    llm = ScriptedLLM([reply(text("first")), quote_last])
+    llm.create(messages=[{"role": "user", "content": "hi"}], tools=[], system="s")
+    second = llm.create(
+        messages=[{"role": "user", "content": "hi"}, {"role": "assistant", "content": "x"}],
+        tools=[],
+        system="s",
+    )
+
+    assert second.content[0].text == "Got 2 messages."

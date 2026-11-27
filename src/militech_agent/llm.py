@@ -7,7 +7,7 @@ runs; ScriptedLLM replays canned responses so tests never call a model or need a
 import copy
 import itertools
 import os
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from typing import Any, Protocol, runtime_checkable
 
 from anthropic import AnthropicFoundry
@@ -123,11 +123,18 @@ def _ordinal(n: int) -> str:
     return f"{n}{suffix}"
 
 
-class ScriptedLLM:
-    """Replays `responses` in order and records a snapshot of every request in `calls`."""
+ScriptedResponse = Message | Callable[[list[dict[str, Any]]], Message]
 
-    def __init__(self, responses: Iterable[Message]) -> None:
-        self.responses: Sequence[Message] = list(responses)
+
+class ScriptedLLM:
+    """Replays `responses` in order and records a snapshot of every request in `calls`.
+
+    A response may be a function of the conversation so far, returning the Message to send;
+    e.g. to quote the decision_id the server just returned, as the real model would.
+    """
+
+    def __init__(self, responses: Iterable[ScriptedResponse]) -> None:
+        self.responses: Sequence[ScriptedResponse] = list(responses)
         self.calls: list[dict[str, Any]] = []
 
     def create(
@@ -140,4 +147,7 @@ class ScriptedLLM:
                 f"ScriptedLLM has no response for the {_ordinal(n)} call "
                 f"({len(self.responses)} scripted)"
             )
-        return self.responses[n - 1]
+        response = self.responses[n - 1]
+        if callable(response):
+            response = response(self.calls[-1]["messages"])
+        return response

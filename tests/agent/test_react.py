@@ -7,6 +7,10 @@ Rules these tests pin down:
   and the trace records thought "(none)".
 - The only way to finish is the local `submit_decision` tool; invalid input re-prompts.
 - Hitting the cap: the agent itself escalates with UNCLEAR_REQUEST.
+- A valid submission is then checked by the guardrail (M10) against what the tools returned.
+  A violation gets one correction; a second violation escalates with UNCLEAR_REQUEST.
+  Scripted runs therefore follow the rules too: record before approving or denying, flag
+  before escalating, and quote the id the server returned (via reply functions).
 - Trace entries are {step, thought, action, args, observation}, sent to `on_step` live and
   written to traces/<request_id>.md when a traces dir is given.
 """
@@ -34,7 +38,7 @@ def thought(value):
     return text(f"Thought: {value}")
 
 
-APPROVED = "Approved: a second holo-display is on its way."
+APPROVED = "Approved: a second holo-display is on its way"
 
 
 def submit(decision="approve", reason_code=None, item="holo_display",
@@ -43,6 +47,35 @@ def submit(decision="approve", reason_code=None, item="holo_display",
         "decision": decision, "reason_code": reason_code, "item": item,
         "request_type": request_type, "draft_response": draft,
     })  # fmt: skip
+
+
+def last_observation(messages):
+    """The observation the model just received (the latest tool_result)."""
+    return json.loads(messages[-1]["content"][0]["content"])
+
+
+def submit_quoting(decision="approve", reason_code=None, item="holo_display",
+                   request_type="additional", draft=APPROVED):  # fmt: skip
+    """A reply function: submit, quoting the decision_id or ticket_id just returned."""
+
+    def _reply(messages):
+        observation = last_observation(messages)
+        quoted = observation.get("decision_id") or observation.get("ticket_id")
+        draft_text = f"{draft} ({quoted})."
+        return reply(thought("Recorded; submit and quote the id."),
+                     submit(decision, reason_code, item, request_type, draft_text))  # fmt: skip
+
+    return _reply
+
+
+def escalate(code="UNCLEAR_REQUEST", employee_id="E1001", item="holo_display"):
+    """Two replies: flag_for_human_review, then submit quoting the ticket."""
+    flag_args = {"employee_id": employee_id, "request": "test request",
+                 "reason": "test escalation", "reason_code": code}  # fmt: skip
+    return [
+        reply(thought(f"Escalate with {code}."), tool_use("flag_for_human_review", flag_args)),
+        submit_quoting("escalate", code, item, None, "Passed to a human reviewer"),
+    ]
 
 
 class CountingSession:
@@ -69,7 +102,7 @@ def approve_script():
               tool_use("record_decision", {"employee_id": "E1001", "item": "holo_display",
                                            "decision": "approve", "request_type": "additional",
                                            "reason": "Second display within the cap of 2"})),
-        reply(thought("Approval recorded; submit the decision."), submit()),
+        submit_quoting(),
     ])  # fmt: skip
 
 
@@ -112,7 +145,7 @@ async def test_result_carries_the_decision_and_ids(data_dir):
     assert (result.request_id, result.employee_id) == ("REQ-0001", "E1001")
     assert (result.decision, result.reason_code) == ("approve", None)
     assert (result.item, result.request_type) == ("holo_display", "additional")
-    assert result.response_text == APPROVED
+    assert result.response_text == f"{APPROVED} ({result.decision_id})."
     assert result.decision_id.startswith("DEC-")
     assert result.ticket_id is None
     assert result.steps == 4
@@ -168,13 +201,13 @@ async def test_missing_thought_reprompts_before_running_the_tool(data_dir):
         reply(first_try),  # no Thought
         reply(thought("Look up the employee."),
               tool_use("get_employee_info", {"employee_id": "E1001"})),
-        reply(thought("Done looking; escalate for the test."),
-              submit("escalate", "UNCLEAR_REQUEST", draft="Passed to a human.")),
+        *escalate(),
     ])  # fmt: skip
 
     result, session = await run(llm, data_dir)
 
-    assert session.calls == [("get_employee_info", {"employee_id": "E1001"})]  # once, not twice
+    lookups = [call for call in session.calls if call[0] == "get_employee_info"]
+    assert lookups == [("get_employee_info", {"employee_id": "E1001"})]  # once, not twice
     reprompt = llm.calls[1]["messages"][-1]["content"][0]
     assert (reprompt["tool_use_id"], reprompt["is_error"]) == (first_try.id, True)
     assert "Thought" in json.loads(reprompt["content"])["message"]
@@ -186,13 +219,12 @@ async def test_missing_thought_twice_runs_the_tool_and_records_none(data_dir):
     llm = ScriptedLLM([
         reply(tool_use("get_employee_info", {"employee_id": "E1001"})),
         reply(tool_use("get_employee_info", {"employee_id": "E1001"})),  # still no Thought
-        reply(thought("Escalate for the test."),
-              submit("escalate", "UNCLEAR_REQUEST", draft="Passed to a human.")),
+        *escalate(),
     ])  # fmt: skip
 
     result, session = await run(llm, data_dir)
 
-    assert len(session.calls) == 1
+    assert [name for name, _ in session.calls].count("get_employee_info") == 1
     assert result.trace[1]["thought"] == "(none)"
     assert result.trace[1]["observation"]["name"] == "Reyes Okafor"
 
@@ -245,9 +277,8 @@ async def test_mcp_error_observation_is_passed_to_the_model(data_dir):
               tool_use("flag_for_human_review",
                        {"employee_id": "E9999", "request": DEMO_5["message"],
                         "reason": "Employee not on file", "reason_code": "EMPLOYEE_NOT_FOUND"})),
-        reply(thought("Ticket opened; submit."),
-              submit("escalate", "EMPLOYEE_NOT_FOUND", item="neural_headset",
-                     draft="Your request has been passed to a human reviewer.")),
+        submit_quoting("escalate", "EMPLOYEE_NOT_FOUND", "neural_headset", None,
+                       "Your request has been passed to a human reviewer"),
     ])  # fmt: skip
 
     result, _ = await run(llm, data_dir, request=DEMO_5)
@@ -262,8 +293,7 @@ async def test_mcp_error_observation_is_passed_to_the_model(data_dir):
 async def test_protocol_error_does_not_end_the_run(data_dir):
     llm = ScriptedLLM([
         reply(thought("Call with no arguments."), tool_use("get_employee_info", {})),
-        reply(thought("That failed; escalate."),
-              submit("escalate", "UNCLEAR_REQUEST", draft="Passed to a human.")),
+        *escalate(),
     ])  # fmt: skip
 
     result, _ = await run(llm, data_dir)
@@ -279,8 +309,7 @@ async def test_invalid_submit_decision_reprompts(data_dir):
     bad = submit(decision="maybe")
     llm = ScriptedLLM([
         reply(thought("Submit."), bad),
-        reply(thought("Fix the decision value."),
-              submit("escalate", "UNCLEAR_REQUEST", draft="Passed to a human.")),
+        *escalate(),
     ])  # fmt: skip
 
     result, _ = await run(llm, data_dir)
@@ -299,14 +328,18 @@ async def test_reason_codes_must_fit_the_decision(data_dir):
               submit("escalate", "NOT_ENTITLED", draft="Escalated.")),
         reply(thought("Approve with a code."), submit("approve", "NOT_ENTITLED")),
         reply(thought("Empty draft."), submit("deny", "NOT_ENTITLED", draft="  ")),
-        reply(thought("Valid."), submit("deny", "NOT_ENTITLED", draft="Denied: not entitled.")),
+        reply(thought("Record the denial."),
+              tool_use("record_decision", {"employee_id": "E1001", "item": "holo_display",
+                                           "decision": "deny", "request_type": "additional",
+                                           "reason": "NOT_ENTITLED (test)"})),
+        submit_quoting("deny", "NOT_ENTITLED", draft="Denied: not entitled"),
     ])  # fmt: skip
 
     result, _ = await run(llm, data_dir)
 
     assert [e["observation"].get("error") for e in result.trace[:4]] == ["invalid_submission"] * 4
     assert (result.decision, result.reason_code) == ("deny", "NOT_ENTITLED")
-    assert result.steps == 5
+    assert result.steps == 6
 
 
 # --- the trace: live, and on disk ---
@@ -353,3 +386,176 @@ async def test_markdown_shows_thought_action_observation_per_step(data_dir):
     assert "**Observation:**" in md
     assert "## Decision" in md and "approve" in md
     assert result.decision_id in md
+
+
+# --- the guardrail (M10): one correction, then escalate ---
+
+
+async def test_guardrail_violation_gets_one_correction(data_dir):
+    unrecorded = submit()  # approve without record_decision
+    llm = ScriptedLLM([
+        reply(thought("Approve straight away."), unrecorded),
+        reply(thought("The guardrail says record it first."),
+              tool_use("record_decision", {"employee_id": "E1001", "item": "holo_display",
+                                           "decision": "approve", "request_type": "additional",
+                                           "reason": "Second display within the cap of 2"})),
+        submit_quoting(),
+    ])  # fmt: skip
+
+    result, _ = await run(llm, data_dir)
+
+    feedback = llm.calls[1]["messages"][-1]["content"][0]
+    assert (feedback["tool_use_id"], feedback["is_error"]) == (unrecorded.id, True)
+    body = json.loads(feedback["content"])
+    assert body["error"] == "guardrail_violation"
+    assert [v["code"] for v in body["violations"]] == ["approve_not_recorded"]
+    assert result.trace[0]["observation"] == body
+    assert result.decision == "approve"
+    assert result.decision_id is not None
+    assert result.violations == []
+
+
+async def test_second_violation_escalates_with_unclear_request(data_dir):
+    llm = ScriptedLLM([
+        reply(thought("Approve without recording."), submit()),
+        reply(thought("Try the same again."), submit()),
+    ])  # fmt: skip
+
+    result, session = await run(llm, data_dir)
+
+    assert len(llm.calls) == 2  # no third request: the agent escalates instead
+    assert session.calls[-1][0] == "flag_for_human_review"
+    assert session.calls[-1][1]["reason_code"] == "UNCLEAR_REQUEST"
+    assert "approve_not_recorded" in session.calls[-1][1]["reason"]
+    assert (result.decision, result.reason_code) == ("escalate", "UNCLEAR_REQUEST")
+    assert result.ticket_id.startswith("ESC-")
+    assert result.ticket_id in result.response_text
+    assert [v["code"] for v in result.violations] == ["approve_not_recorded"]
+    assert result.stopped_by_cap is False
+    assert result.trace[-1]["action"] == "flag_for_human_review"
+
+
+async def test_violations_are_shown_in_the_trace_markdown(data_dir):
+    llm = ScriptedLLM([
+        reply(thought("Approve without recording."), submit()),
+        reply(thought("Again."), submit()),
+    ])  # fmt: skip
+
+    result, _ = await run(llm, data_dir)
+
+    md = trace_to_markdown(result)
+    assert "## Guardrail" in md and "approve_not_recorded" in md
+
+
+# --- one outcome per request: no contradictory audit records ---
+# Once record_decision or flag_for_human_review succeeds, further calls to either are blocked
+# (not run). The model is told the outcome is recorded, with its id, and to submit.
+
+RECORD_APPROVE = {"employee_id": "E1001", "item": "holo_display", "decision": "approve",
+                  "request_type": "additional", "reason": "Within the cap"}  # fmt: skip
+FLAG = {"employee_id": "E1001", "request": "test request", "reason": "test escalation",
+        "reason_code": "UNCLEAR_REQUEST"}  # fmt: skip
+
+
+async def test_ticket_after_a_recorded_decision_is_blocked(data_dir):
+    llm = ScriptedLLM([
+        reply(thought("Record the approval."), tool_use("record_decision", RECORD_APPROVE)),
+        reply(thought("Escalate as well, just in case."), tool_use("flag_for_human_review", FLAG)),
+        submit_quoting(),  # quotes the decision_id the block message repeats
+    ])  # fmt: skip
+
+    result, session = await run(llm, data_dir)
+
+    assert [name for name, _ in session.calls] == ["record_decision"]  # the flag never ran
+    blocked = result.trace[1]["observation"]
+    assert blocked["error"] == "outcome_already_recorded"
+    assert blocked["decision_id"] == result.decision_id
+    assert "submit_decision" in blocked["message"]
+    assert not (data_dir / "escalations.jsonl").exists()
+    assert result.decision == "approve"
+
+
+async def test_decision_after_a_ticket_is_blocked(data_dir):
+    llm = ScriptedLLM([
+        reply(thought("Escalate."), tool_use("flag_for_human_review", FLAG)),
+        reply(thought("Approve too."), tool_use("record_decision", RECORD_APPROVE)),
+        submit_quoting("escalate", "UNCLEAR_REQUEST", "holo_display", None, "Passed on"),
+    ])  # fmt: skip
+
+    result, session = await run(llm, data_dir)
+
+    assert [name for name, _ in session.calls] == ["flag_for_human_review"]
+    assert result.trace[1]["observation"]["ticket_id"] == result.ticket_id
+    assert not (data_dir / "decisions.jsonl").exists()
+    assert result.decision == "escalate"
+
+
+async def test_a_second_decision_is_blocked_too(data_dir):
+    deny = {**RECORD_APPROVE, "decision": "deny", "reason": "NOT_ENTITLED"}
+    llm = ScriptedLLM([
+        reply(thought("Approve."), tool_use("record_decision", RECORD_APPROVE)),
+        reply(thought("Actually deny."), tool_use("record_decision", deny)),
+        submit_quoting(),
+    ])  # fmt: skip
+
+    result, _ = await run(llm, data_dir)
+
+    lines = (data_dir / "decisions.jsonl").read_text().splitlines()
+    assert len(lines) == 1  # only the approval was written
+    assert result.trace[1]["observation"]["error"] == "outcome_already_recorded"
+
+
+async def test_a_refused_decision_is_not_an_outcome(data_dir):
+    # E1003 is corpo_staff: the server refuses the approval, so a deny may still follow.
+    corpo = {"request_id": "REQ-0002", "employee_id": "E1003",
+             "message": "Requesting a cyberdeck so I can jack in on my lunch break."}  # fmt: skip
+    approve = {"employee_id": "E1003", "item": "cyberdeck", "decision": "approve",
+               "request_type": "additional", "reason": "Wants one"}  # fmt: skip
+    llm = ScriptedLLM([
+        reply(thought("Try approving."), tool_use("record_decision", approve)),
+        reply(thought("Refused: deny instead."),
+              tool_use("record_decision", {**approve, "decision": "deny",
+                                           "reason": "NOT_ENTITLED"})),
+        submit_quoting("deny", "NOT_ENTITLED", "cyberdeck", "additional", "Denied"),
+    ])  # fmt: skip
+
+    result, _ = await run(llm, data_dir, request=corpo)
+
+    assert result.trace[0]["observation"]["error"] == "approval_not_permitted"
+    assert result.trace[1]["observation"]["decision_id"] == result.decision_id
+    assert (result.decision, result.reason_code) == ("deny", "NOT_ENTITLED")
+
+
+# --- the agent's own fallback escalation names the decision it conflicts with ---
+
+
+async def test_guardrail_fallback_ticket_names_the_recorded_decision(data_dir):
+    llm = ScriptedLLM([
+        reply(thought("Record the approval."), tool_use("record_decision", RECORD_APPROVE)),
+        reply(thought("Submit without the id."), submit(draft="Approved!")),
+        reply(thought("Again without the id."), submit(draft="Approved!!")),
+    ])  # fmt: skip
+
+    result, session = await run(llm, data_dir)
+
+    name, flag_args = session.calls[-1]
+    assert name == "flag_for_human_review"  # the agent's own escalation still runs
+    assert result.decision_id.startswith("DEC-")
+    assert result.decision_id in flag_args["reason"]
+    assert "conflict" in flag_args["reason"].lower()
+    assert result.decision == "escalate"
+
+
+async def test_step_cap_ticket_names_the_recorded_decision(data_dir):
+    llm = ScriptedLLM([
+        reply(thought("Record the approval."), tool_use("record_decision", RECORD_APPROVE)),
+        *[reply(thought(f"Check policy ({n})."),
+                tool_use("get_policy_limits", {"role": "netrunner"}))
+          for n in range(MAX_STEPS - 1)],
+    ])  # fmt: skip
+
+    result, session = await run(llm, data_dir)
+
+    flag_args = session.calls[-1][1]
+    assert result.stopped_by_cap is True
+    assert result.decision_id in flag_args["reason"]
