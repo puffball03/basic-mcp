@@ -65,6 +65,13 @@ def trace_to_markdown(result: AgentResult) -> str:
         ]
         lines += [f"- `{v['code']}`: {v['message']}" for v in result.violations]
         lines.append("")
+    if result.reflection:
+        lines += ["## Reflection", ""]
+        for review in result.reflection:
+            issues = "; ".join(review["issues"]) or "no issues"
+            lines += [f"**Round {review['round']}: {review['verdict']}** ({issues})", ""]
+            lines += [f"> {line}" for line in review["draft"].splitlines() or [""]]
+            lines.append("")
     lines += [
         "## Decision",
         "",

@@ -186,3 +186,15 @@ def test_scripted_llm_accepts_a_reply_function():
     )
 
     assert second.content[0].text == "Got 2 messages."
+
+
+def test_foundry_llm_sends_no_tool_fields_without_tools(no_foundry_env):
+    # The reflection reviewer calls the model with no tools; the API rejects tool_choice when
+    # no tools are given, so neither field is sent.
+    fake = FakeClient(reply(text('{"verdict": "confirmed", "issues": []}')))
+    llm = FoundryLLM(endpoint=ENDPOINT, api_key="test-key", client=fake)
+
+    llm.create(messages=[{"role": "user", "content": "review"}], tools=[], system="reviewer")
+
+    (sent,) = fake.messages.calls
+    assert "tools" not in sent and "tool_choice" not in sent

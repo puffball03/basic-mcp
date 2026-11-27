@@ -71,13 +71,15 @@ class FoundryLLM:
     def create(
         self, *, messages: list[dict[str, Any]], tools: list[dict[str, Any]], system: str
     ) -> Message:
+        # A call without tools (e.g. the reflection reviewer) sends neither field: the API
+        # rejects tool_choice when no tools are given.
+        tool_fields = {"tools": tools, "tool_choice": ONE_TOOL_AT_A_TIME} if tools else {}
         return self.client.messages.create(
             model=self.model,
             max_tokens=self.max_tokens,
             system=system,
             messages=messages,
-            tools=tools,
-            tool_choice=ONE_TOOL_AT_A_TIME,
+            **tool_fields,
         )
 
 
